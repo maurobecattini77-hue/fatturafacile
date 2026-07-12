@@ -857,38 +857,27 @@
   /* Consegna forzata dal DOCENTE, eseguita sul dispositivo dell'ALUNNO (quando connesso):
      cattura la fattura in corso (lavoro reale), segna "non svolta" le altre non consegnate,
      poi blocca lo schermo. */
-  function consegnaForzataAlunno(){
-    var pin = STATE.studente ? STATE.studente.pin : null;
-    if(!pin) return;
+  // Blocca lo schermo dell'alunno quando il DOCENTE ha consegnato al posto suo (nessuna scrittura: le fa il docente).
+  function bloccaPerConsegnaDocente(){
+    if(STATE.consegnata) return;
+    STATE.consegnata = true;
     stopConsegnaWatcher();
-    var inEditor = (byId('editor').style.display !== 'none') && !!STATE.assegnataId && !STATE.consegnata;
-    if(inEditor){ STATE.consegnata = true; catturaConsegnaCorrente(); }
-    var done = consegnateLocali(pin);
-    var lista = (STATE.mieAssegnate && STATE.mieAssegnate.length) ? STATE.mieAssegnate : (STATE.assegnataId ? [{ id:STATE.assegnataId }] : []);
-    lista.forEach(function(x){
-      if(done.indexOf(x.id) !== -1) return;
-      var f = (typeof FATTURE!=='undefined') ? FATTURE.find(function(y){ return y.id === x.id; }) : null;
-      var cortCorr = ''; try{ if(f) cortCorr = buildCortesia(f.soluzione); }catch(e){}
-      if(SB){ try{ SB.from('fatt_tentativi').insert({ pin:pin, classe:(CLASSE&&CLASSE.classe)||'', fattura_id:x.id, modalita:'forzata', completato:true,
-        risposte:{ titolo:(f?f.titolo:x.id), nome:((STATE.studente.cognome||'')+' '+(STATE.studente.nome||'')).trim(), cognome:(STATE.studente.cognome||''), nonSvolta:true, cortesiaAlunno:'', cortesiaCorretta:cortCorr, dashboardAlunno:'', dashboardCorretta:'', data:new Date().toISOString() } }).then(function(){},function(){}); }catch(e){} }
-      aggiungiConsegnataLocale(pin, x.id);
-    });
-    if(SB){ try{ SB.from('fatt_studenti').update({ stato:'consegnato', consegnata:true, fattura_corrente:null }).eq('pin', pin).then(function(){},function(){}); }catch(e){} }
-    try{ sessionStorage.removeItem('ff_studente_attivo'); }catch(e){}
     stopPresenza();
-    mostraBloccoMsg('✅', 'Verifica consegnata', 'Tempo scaduto: il docente ha consegnato la tua verifica. Se ti riammette, potrai rientrare.', '#2f7d54');
+    try{ sessionStorage.removeItem('ff_studente_attivo'); }catch(e){}
+    mostraBloccoMsg('✅', 'Verifica consegnata', 'Il docente ha consegnato la tua verifica. Se ti riammette, potrai rientrare.', '#2f7d54');
     startBloccoWatcher();
   }
   function stopConsegnaWatcher(){ if(STATE.consegnaTimer){ clearInterval(STATE.consegnaTimer); STATE.consegnaTimer = null; } }
-  // Sorvegliante lato ALUNNO: se il docente forza la consegna (stato='da_consegnare'), consegna da solo.
+  // Sorvegliante lato ALUNNO: se il docente segna la sua verifica come consegnata, BLOCCA lo schermo.
   function startConsegnaWatcher(){
     stopConsegnaWatcher();
     if(!SB) return;
     STATE.consegnaTimer = setInterval(function(){
-      if(!STATE.studente){ stopConsegnaWatcher(); return; }
-      SB.from('fatt_studenti').select('stato').eq('pin', STATE.studente.pin).maybeSingle().then(function(res){
+      if(!STATE.studente || STATE.consegnata){ return; }
+      SB.from('fatt_studenti').select('stato,consegnata').eq('pin', STATE.studente.pin).maybeSingle().then(function(res){
         var s = (res && res.data) ? res.data : null;
-        if(s && s.stato === 'da_consegnare'){ consegnaForzataAlunno(); }
+        if(!s) return;
+        if((s.stato === 'consegnato' || s.stato === 'da_consegnare' || s.consegnata === true) && !STATE.consegnata){ bloccaPerConsegnaDocente(); }
       }, function(){});
     }, 2500);
   }
@@ -966,46 +955,34 @@
     if(CLOUD_STUD[pin]) CLOUD_STUD[pin].riammesso = true;
   }
   /* ---------- CONSEGNA FORZATA dal docente (campanella di fine verifica) ----------
-     Se l'alunno è CONNESSO → segnala 'da_consegnare': il suo dispositivo consegna da solo
-     (catturando il lavoro in corso). Se è DISCONNESSO → finalizza qui (non svolta + consegnato). */
-  function forzaConsegna(pin){
-    if(!SB) return;
-    var cs = CLOUD_STUD[pin] || {};
-    var recent = cs.ultimo_accesso && (Date.now() - new Date(cs.ultimo_accesso).getTime() < 90000);
-    if(recent){
-      try{ SB.from('fatt_studenti').update({ stato:'da_consegnare' }).eq('pin', pin).then(function(){},function(){}); }catch(e){}
-      if(CLOUD_STUD[pin]) CLOUD_STUD[pin].stato = 'da_consegnare';
-      // Rete di sicurezza: se entro 8s il dispositivo dell'alunno non ha consegnato (browser chiuso), finalizza qui.
-      setTimeout(function(){
-        try{ SB.from('fatt_studenti').select('stato').eq('pin', pin).maybeSingle().then(function(res){
-          var s = (res && res.data) ? res.data : null;
-          if(s && s.stato === 'da_consegnare'){ finalizzaConsegnaForzata(pin); refreshCloudStud(function(){ refreshConsegne(renderDocente); }); }
-        }, function(){}); }catch(e){}
-      }, 8000);
-      return;
-    }
-    finalizzaConsegnaForzata(pin);
-  }
+     SEMPRE lato docente: marca «non svolta» le fatture non consegnate e segna consegnato.
+     Il dispositivo dell'alunno (se connesso) si limita a bloccare lo schermo (startConsegnaWatcher). */
+  function forzaConsegna(pin){ finalizzaConsegnaForzata(pin); }
+  // Consegna forzata SEMPRE lato docente (affidabile, indipendente dal dispositivo dell'alunno):
+  // legge FRESCO dal cloud cosa ha davvero consegnato, poi marca «non svolta» SOLO le fatture mancanti e segna consegnato.
   function finalizzaConsegnaForzata(pin){
     if(!SB) return;
     var assigned = effectiveAssignedList(pin);
     if(!assigned.length) return;
-    var delivered = CLOUD_CONS[pin] || {};
     var al = (CLASSE && CLASSE.alunni) ? CLASSE.alunni.find(function(a){ return a.pin === pin; }) : null;
     var nomeCompleto = al ? ((al.cognome||'') + ' ' + (al.nome||'')).trim() : pin;
     var cognome = al ? (al.cognome||'') : '';
-    assigned.forEach(function(x){
-      if(delivered[x.id]) return; // già consegnata davvero → lascia stare
-      var f = (typeof FATTURE!=='undefined') ? FATTURE.find(function(y){ return y.id === x.id; }) : null;
-      var cortCorr = '';
-      try{ if(f) cortCorr = buildCortesia(f.soluzione); }catch(e){}
-      var payload = { pin:pin, classe:(CLASSE&&CLASSE.classe)||'', fattura_id:x.id, modalita:'forzata', completato:true,
-        risposte:{ titolo:(f?f.titolo:x.id), nome:nomeCompleto, cognome:cognome, nonSvolta:true, cortesiaAlunno:'', cortesiaCorretta:cortCorr, dashboardAlunno:'', dashboardCorretta:'', data:new Date().toISOString() } };
-      try{ SB.from('fatt_tentativi').insert(payload).then(function(){}, function(){}); }catch(e){}
-      CLOUD_CONS[pin] = CLOUD_CONS[pin] || {}; CLOUD_CONS[pin][x.id] = true;
-    });
-    try{ SB.from('fatt_studenti').update({ stato:'consegnato', consegnata:true, fattura_corrente:null }).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
-    if(CLOUD_STUD[pin]){ CLOUD_STUD[pin].stato = 'consegnato'; CLOUD_STUD[pin].consegnata = true; }
+    try{
+      SB.from('fatt_tentativi').select('fattura_id').eq('pin', pin).eq('completato', true).then(function(res){
+        var done = {}; ((res && res.data) || []).forEach(function(t){ if(t.fattura_id) done[t.fattura_id] = true; });
+        assigned.forEach(function(x){
+          if(done[x.id]) return; // già consegnata davvero → non toccare
+          var f = (typeof FATTURE!=='undefined') ? FATTURE.find(function(y){ return y.id === x.id; }) : null;
+          var cortCorr = ''; try{ if(f) cortCorr = buildCortesia(f.soluzione); }catch(e){}
+          try{ SB.from('fatt_tentativi').insert({ pin:pin, classe:(CLASSE&&CLASSE.classe)||'', fattura_id:x.id, modalita:'forzata', completato:true,
+            risposte:{ titolo:(f?f.titolo:x.id), nome:nomeCompleto, cognome:cognome, nonSvolta:true, cortesiaAlunno:'', cortesiaCorretta:cortCorr, dashboardAlunno:'', dashboardCorretta:'', data:new Date().toISOString() } }).then(function(){}, function(){}); }catch(e){}
+          CLOUD_CONS[pin] = CLOUD_CONS[pin] || {}; CLOUD_CONS[pin][x.id] = true;
+        });
+        try{ SB.from('fatt_studenti').update({ stato:'consegnato', consegnata:true, fattura_corrente:null }).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
+        if(CLOUD_STUD[pin]){ CLOUD_STUD[pin].stato = 'consegnato'; CLOUD_STUD[pin].consegnata = true; }
+        renderDocente(); // riflette subito lo stato (poi il refresh periodico riconcilia col cloud)
+      }, function(){});
+    }catch(e){}
   }
   function forzaConsegnaClasse(){
     if(!(CLASSE && CLASSE.alunni && CLASSE.alunni.length)){ showAlert('Nessuna classe caricata.'); return; }
@@ -1550,6 +1527,15 @@
   }
 
   /* ---------- Ricalcolo STRUTTURA: nessun valore calcolato, solo visibilita' ---------- */
+  // NERETTO sull'importo NETTO di ogni riga merce, a TUTTI i livelli (Manuale/Guidata/Automatica):
+  // l'importo di riga è in grassetto quando la riga NON ha sconti (è già il netto da sommare);
+  // se la riga ha uno sconto, il grassetto sta sul campo "netto" della riga sconto (già gestito).
+  function aggiornaNeretto(){
+    document.querySelectorAll('#editor .artbox').forEach(function(box){
+      var impCell = box.querySelector('.imp');
+      if(impCell) impCell.classList.toggle('is-net', box.querySelectorAll('.sconto-row').length === 0);
+    });
+  }
   function recomputeAll(){
     var arts = document.querySelectorAll('.artbox');
     var order = [];
@@ -2338,21 +2324,28 @@
       startBloccoWatcher();
       return;
     }
-    var lista = ((ctx && ctx.lista) || []).filter(function(x){ return (typeof FATTURE!=='undefined') && FATTURE.some(function(f){ return f.id === x.id; }); });
-    STATE.mieAssegnate = lista;
-    STATE.multiMode = lista.length > 1;
-    startPresenza();
-    startConsegnaWatcher();
-    if(lista.length > 1){ mostraMenuFatture(); return; }
-    STATE.assegnataId = lista.length ? lista[0].id : null;
-    if(lista.length){ try{ localStorage.setItem('ff_livello', String(lista[0].liv || 2)); }catch(e){} }
-    else if(ctx && ctx.livello){ try{ localStorage.setItem('ff_livello', ctx.livello); }catch(e){} }
-    entraAlunnoView();
+    var pin = STATE.studente ? STATE.studente.pin : null;
+    // Allinea le consegne LOCALI a quelle VERE del cloud, così il menù non mostra "consegnata" fantasma
+    // rimaste da prove/verifiche precedenti (la verità è il cloud).
+    rebuildConsegnateLocali(pin, function(){
+      var lista = ((ctx && ctx.lista) || []).filter(function(x){ return (typeof FATTURE!=='undefined') && FATTURE.some(function(f){ return f.id === x.id; }); });
+      STATE.mieAssegnate = lista;
+      STATE.multiMode = lista.length > 1;
+      startPresenza();
+      startConsegnaWatcher();
+      if(lista.length > 1){ mostraMenuFatture(); return; }
+      STATE.assegnataId = lista.length ? lista[0].id : null;
+      if(lista.length){ try{ localStorage.setItem('ff_livello', String(lista[0].liv || 2)); }catch(e){} }
+      else if(ctx && ctx.livello){ try{ localStorage.setItem('ff_livello', ctx.livello); }catch(e){} }
+      entraAlunnoView();
+    });
   }
   function mostraMenuFatture(){
     stopAttesaWatcher();
-    STATE.assegnataId = null; STATE.consegnata = false;
-    cloudPresenza(); // nel menù: fattura_corrente = null, consegnata = false
+    STATE.assegnataId = null;
+    // Se ha già consegnato TUTTE (finito da solo), STATE.consegnata=true → il watcher non lo "blocca" per errore.
+    STATE.consegnata = multiTutteConsegnate();
+    cloudPresenza(); // nel menù: fattura_corrente = null
     renderMenuFatture();
     show('menu-fatture');
   }
@@ -2432,6 +2425,7 @@
     // Applica il livello: compone il testo e imposta le anagrafiche.
     // Se ho ripristinato un lavoro salvato, NON azzero le anagrafiche già compilate.
     applicaLivello(LIVELLO, !ripristinato);
+    aggiornaNeretto(); // importi merce in grassetto fin dall'inizio, a ogni livello
     var top = byId('topbar-info'); top.innerHTML = '';
     var span = document.createElement('span'); span.textContent = STATE.studente.cognome + ' ' + STATE.studente.nome + ' · classe ' + CLASSE.classe;
     var out = document.createElement('span'); out.className = 'link'; out.textContent = 'Esci'; out.addEventListener('click', goGate);
@@ -2773,7 +2767,7 @@
         localStorage.removeItem('ff_classe'); localStorage.removeItem('ff_archivio'); localStorage.removeItem('ff_assegnata');
         localStorage.removeItem('ff_livello'); sessionStorage.removeItem('ff_studente_attivo');
         var da_rimuovere = [];
-        for(var i = 0; i < localStorage.length; i++){ var k = localStorage.key(i); if(k && k.indexOf('ff_lavoro_') === 0) da_rimuovere.push(k); }
+        for(var i = 0; i < localStorage.length; i++){ var k = localStorage.key(i); if(k && (k.indexOf('ff_lavoro_') === 0 || k.indexOf('ff_consegnate_') === 0)) da_rimuovere.push(k); }
         da_rimuovere.forEach(function(k){ localStorage.removeItem(k); });
       }catch(e){}
       renderDocente();
@@ -2851,8 +2845,9 @@
   // Ricalcolo automatico LIVE: solo nel livello Automatica, quando l'alunno digita
   // quantità/prezzo/percentuali/spese o cambia l'IVA. I campi calcolati sono di sola
   // lettura, quindi impostarli via codice non rigenera altri eventi (niente loop).
-  byId('editor').addEventListener('input', function(){ if(LIVELLO === 3) autocalc(); });
-  byId('editor').addEventListener('change', function(e){ if(LIVELLO === 3 && e.target && e.target.classList.contains('iva')) autocalc(); });
+  byId('editor').addEventListener('input', function(){ if(LIVELLO === 3) autocalc(); aggiornaNeretto(); });
+  byId('editor').addEventListener('change', function(e){ if(LIVELLO === 3 && e.target && e.target.classList.contains('iva')) autocalc(); aggiornaNeretto(); });
+  byId('editor').addEventListener('click', function(){ setTimeout(aggiornaNeretto, 0); }); // dopo aggiunta/rimozione articoli o sconti
   // Dopo un F5: se c'è un alunno attivo, torna direttamente alla sua compilazione.
   try{
     var attivo = sessionStorage.getItem('ff_studente_attivo');
