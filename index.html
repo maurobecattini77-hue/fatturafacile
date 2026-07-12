@@ -2307,15 +2307,25 @@
   function checkAssegnazione(){
     try{ var c = localStorage.getItem('ff_classe'); if(c) CLASSE = JSON.parse(c); }catch(e){}
     try{ var a = localStorage.getItem('ff_archivio'); if(a) FATTURE = JSON.parse(a); }catch(e){}
+    buildRubrica();
+    if(!STATE.studente) return;
+    // 1) CLOUD (funziona anche su dispositivi diversi): l'assegnazione arriva dal docente → entra da solo.
+    if(SB){
+      cloudLeggiContestoAlunno(STATE.studente.pin, function(ctx){
+        if(!inAttesa()) return; // nel frattempo è già entrato
+        var lista = ((ctx && ctx.lista) || []).filter(function(x){ return FATTURE.some(function(f){ return f.id === x.id; }); });
+        if(lista.length || (ctx && ctx.stato === 'consegnato')){
+          stopAttesaWatcher();
+          avviaAlunnoConLista(ctx);
+        }
+      });
+      return;
+    }
+    // 2) Fallback LOCALE (senza cloud, stesso browser).
     var g = null, lv = null; try{ g = localStorage.getItem('ff_assegnata'); lv = localStorage.getItem('ff_livello'); }catch(e){}
     STATE.assegnate = parseAssegnazione(g); STATE.assegnataId = assegnPrimoId(g);
-    buildRubrica();
-    // Filtra le fatture assegnate presenti nell'archivio: se ce n'è più d'una → MENÙ, altrimenti singola.
-    var lista = parseAssegnazione(g).filter(function(x){ return FATTURE.some(function(f){ return f.id === x.id; }); });
-    if(STATE.studente && lista.length){
-      stopAttesaWatcher();
-      avviaAlunnoConLista({ lista: lista, livello: lv, stato: null });
-    }
+    var listaL = parseAssegnazione(g).filter(function(x){ return FATTURE.some(function(f){ return f.id === x.id; }); });
+    if(listaL.length){ stopAttesaWatcher(); avviaAlunnoConLista({ lista: listaL, livello: lv, stato: null }); }
   }
   /* ---------- Menù dell'alunno con PIÙ fatture assegnate ---------- */
   // Avvia l'alunno a partire dal contesto letto dal cloud: se ha 1 sola fattura entra diretto,
@@ -2829,30 +2839,4 @@
   PRISTINE_EDITOR = byId('editor').innerHTML;
   wireEditor();
   recomputeAll();
-  // Auto-save: agganciato UNA sola volta sull'elemento #editor (persistente),
-  // con debounce, così NON viene duplicato dalle chiamate a wireEditor().
-  (function(){
-    var saveTimer = null;
-    byId('editor').addEventListener('input', function(){
-      if(saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(salvaLavoro, 600);
-    });
-  })();
-  // Ricalcolo automatico LIVE: solo nel livello Automatica, quando l'alunno digita
-  // quantità/prezzo/percentuali/spese o cambia l'IVA. I campi calcolati sono di sola
-  // lettura, quindi impostarli via codice non rigenera altri eventi (niente loop).
-  byId('editor').addEventListener('input', function(){ if(LIVELLO === 3) autocalc(); });
-  byId('editor').addEventListener('change', function(e){ if(LIVELLO === 3 && e.target && e.target.classList.contains('iva')) autocalc(); });
-  // Dopo un F5: se c'è un alunno attivo, torna direttamente alla sua compilazione.
-  try{
-    var attivo = sessionStorage.getItem('ff_studente_attivo');
-    var alu = (attivo && CLASSE && CLASSE.alunni) ? CLASSE.alunni.find(function(a){ return a.pin === attivo; }) : null;
-    // Dopo un F5 rientra passando dal contesto (menù se più fatture, singola se una sola).
-    if(alu){ STATE.studente = alu; buildRubrica(); cloudLeggiContestoAlunno(alu.pin, avviaAlunnoConLista); }
-    else { goGate(); }
-  }catch(e){ goGate(); }
-  /* fine boot */
-})();
-</script>
-</body>
-</html>
+  // Auto-save: agganciato UNA 
