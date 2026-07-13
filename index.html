@@ -304,6 +304,16 @@
   .btn-consegna{ border:none; background:#e6b657; color:#4a3712; border-radius:10px; padding:8px 15px; font-family:inherit; font-size:14px; font-weight:700; cursor:pointer; display:inline-flex; align-items:center; }
   .btn-archivio{ background:#C0B9EF; border:1px solid #9187db; color:var(--ink); border-radius:8px; padding:10px 16px; font-size:14px; line-height:16px; cursor:pointer; display:inline-flex; align-items:center; }
   .btn-archivio:hover{ background:#b3abea; }
+  /* Archivio compiti — stile "ipotesi 5" (accento viola). Attivo solo quando #menu-fatture ha la classe .arch5 */
+  #menu-fatture.arch5 .attesa-card{ background:#f6f5fc; }
+  #menu-fatture.arch5 .attesa-title{ color:#3c3489; }
+  .arch-row{ display:flex; align-items:center; gap:12px; background:#fff; border:1px solid #ece9fb; border-left:4px solid #7f77dd; border-radius:11px; padding:10px 14px; margin-bottom:9px; text-align:left; }
+  .arch-av{ width:36px; height:36px; border-radius:50%; background:#e7e5fb; color:#534ab7; display:flex; align-items:center; justify-content:center; flex:none; font-weight:700; font-size:15px; }
+  .arch-info{ flex:1; min-width:0; }
+  .arch-nm{ font-weight:700; font-size:14px; color:#2c2c2a; }
+  .arch-mt{ font-size:12px; color:#6b6b82; margin-top:1px; }
+  .arch-apri{ border:none; background:#534ab7; color:#fff; border-radius:8px; padding:8px 18px; font-size:13px; font-weight:600; cursor:pointer; }
+  .arch-apri:hover{ background:#463da0; }
   .btn-consegna:hover{ filter:brightness(.96); }
   .btn-consegna-uno{ border:none; background:#f4e3a8; color:#6b5316; border-radius:8px; padding:4px 11px; font-family:inherit; font-size:12px; font-weight:700; cursor:pointer; display:inline-flex; align-items:center; }
   .btn-consegna-uno:hover{ filter:brightness(.96); }
@@ -2617,6 +2627,7 @@
   }
   function mostraMenuFatture(){
     stopAttesaWatcher();
+    byId('menu-fatture').classList.remove('arch5');
     STATE.assegnataId = null;
     // Se ha già consegnato TUTTE (finito da solo), STATE.consegnata=true → il watcher non lo "blocca" per errore.
     STATE.consegnata = multiTutteConsegnate();
@@ -3065,6 +3076,7 @@
   // Maschera: TUTTE le fatture dell'archivio. Fatte → "✓ Consegnato" + "Vedi soluzione"; da fare → "Compila".
   function renderCompitiPicker(){
     STATE.modalitaCompiti = true; STATE.menuBackFn = null; STATE.archivioMode = false;
+    byId('menu-fatture').classList.remove('arch5');
     var eb = byId('btn-esci-menu'); if(eb) eb.textContent = 'Esci';
     var nome = STATE.studente ? STATE.studente.nome : '';
     byId('menu-title').textContent = 'Compiti a casa' + (nome ? (' — ' + nome) : '');
@@ -3151,25 +3163,26 @@
   function renderArchivioNomi(){
     STATE.archivioMode = true; STATE.modalitaCompiti = false; STATE.solExitFn = null;
     STATE.menuBackFn = function(){ tornaDashboardDaArchivio(); };
+    byId('menu-fatture').classList.add('arch5');
     var byPin = STATE.archivioCompiti || {};
     var pins = Object.keys(byPin).sort(function(a, b){ return (byPin[a].nome || '').localeCompare(byPin[b].nome || '', 'it'); });
-    byId('menu-title').innerHTML = '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#254a86" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px; margin-right:9px;"><path d="M9 4h3l2 2h5a2 2 0 0 1 2 2v7a2 2 0 0 1 -2 2h-9a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2"/><path d="M17 17v2a2 2 0 0 1 -2 2h-9a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2h2"/></svg>Archivio compiti a casa';
+    byId('menu-title').innerHTML = '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#534ab7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px; margin-right:9px;"><path d="M9 4h3l2 2h5a2 2 0 0 1 2 2v7a2 2 0 0 1 -2 2h-9a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2"/><path d="M17 17v2a2 2 0 0 1 -2 2h-9a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2h2"/></svg>Archivio compiti a casa';
     byId('menu-sub').textContent = pins.length
       ? ('Alunni che hanno consegnato compiti: ' + pins.length + '. Clicca un nome per vedere le sue fatture e le soluzioni.')
       : 'Ancora nessun compito consegnato.';
     var list = byId('menu-list'); list.innerHTML = '';
+    var avatarSvg = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0a4 4 0 0 0 -8 0"/><path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2"/></svg>';
     pins.forEach(function(pin){
       var s = byPin[pin];
       var nfat = Object.keys(s.items).length;
-      var row = document.createElement('div'); row.className = 'menu-row';
-      var num = document.createElement('div'); num.className = 'menu-num'; num.textContent = '👤';
-      var info = document.createElement('div'); info.className = 'menu-info';
-      var t = document.createElement('div'); t.className = 't'; t.textContent = s.nome;
-      var sub = document.createElement('div'); sub.className = 's'; sub.textContent = nfat + (nfat === 1 ? ' fattura consegnata' : ' fatture consegnate');
+      var row = document.createElement('div'); row.className = 'arch-row';
+      var av = document.createElement('div'); av.className = 'arch-av'; av.innerHTML = avatarSvg;
+      var info = document.createElement('div'); info.className = 'arch-info';
+      var t = document.createElement('div'); t.className = 'arch-nm'; t.textContent = s.nome;
+      var sub = document.createElement('div'); sub.className = 'arch-mt'; sub.textContent = nfat + (nfat === 1 ? ' fattura consegnata' : ' fatture consegnate');
       info.appendChild(t); info.appendChild(sub);
-      var cta = document.createElement('div'); cta.className = 'menu-cta';
-      var b = document.createElement('button'); b.className = 'btn-compila'; b.textContent = 'Apri'; b.addEventListener('click', function(){ renderArchivioFatture(pin); }); cta.appendChild(b);
-      row.appendChild(num); row.appendChild(info); row.appendChild(cta); list.appendChild(row);
+      var b = document.createElement('button'); b.className = 'arch-apri'; b.textContent = 'Apri'; b.addEventListener('click', function(){ renderArchivioFatture(pin); });
+      row.appendChild(av); row.appendChild(info); row.appendChild(b); list.appendChild(row);
     });
     if(pins.length){
       var azioni = document.createElement('div'); azioni.style.cssText = 'margin-top:18px; display:flex; gap:12px; flex-wrap:wrap; justify-content:center;';
@@ -3188,6 +3201,7 @@
   }
   function renderArchivioFatture(pin){
     STATE.menuBackFn = function(){ renderArchivioNomi(); };
+    byId('menu-fatture').classList.add('arch5');
     var s = (STATE.archivioCompiti || {})[pin]; if(!s){ renderArchivioNomi(); return; }
     byId('menu-title').textContent = s.nome;
     byId('menu-sub').textContent = 'Fatture consegnate come compiti. Clicca per vedere la soluzione a confronto.';
@@ -3195,14 +3209,13 @@
     var list = byId('menu-list'); list.innerHTML = '';
     ids.forEach(function(id){
       var it = s.items[id];
-      var row = document.createElement('div'); row.className = 'menu-row fatta';
-      var num = document.createElement('div'); num.className = 'menu-num'; num.textContent = numeroFattura(id);
-      var info = document.createElement('div'); info.className = 'menu-info';
-      var t = document.createElement('div'); t.className = 't'; t.textContent = it.titolo || ('Esercizio ' + numeroFattura(id));
+      var row = document.createElement('div'); row.className = 'arch-row';
+      var av = document.createElement('div'); av.className = 'arch-av'; av.textContent = numeroFattura(id);
+      var info = document.createElement('div'); info.className = 'arch-info';
+      var t = document.createElement('div'); t.className = 'arch-nm'; t.textContent = it.titolo || ('Esercizio ' + numeroFattura(id));
       info.appendChild(t);
-      var cta = document.createElement('div'); cta.className = 'menu-cta';
-      var b = document.createElement('button'); b.className = 'btn-compila'; b.textContent = 'Soluzione'; b.addEventListener('click', function(){ apriSoluzioneArchivio(pin, id); }); cta.appendChild(b);
-      row.appendChild(num); row.appendChild(info); row.appendChild(cta); list.appendChild(row);
+      var b = document.createElement('button'); b.className = 'arch-apri'; b.textContent = 'Soluzione'; b.addEventListener('click', function(){ apriSoluzioneArchivio(pin, id); });
+      row.appendChild(av); row.appendChild(info); row.appendChild(b); list.appendChild(row);
     });
     var esci = byId('btn-esci-menu'); if(esci) esci.textContent = '← Torna ai nomi';
     show('menu-fatture');
