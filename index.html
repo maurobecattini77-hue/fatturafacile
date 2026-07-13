@@ -1033,21 +1033,24 @@
   // azzeraConsegne=false (pulsante "Sblocca", doppio accesso): lo fa solo rientrare, senza toccare le consegne.
   function cloudRiammetti(pin, azzeraConsegne){
     if(!SB || !pin) return;
-    var upd = azzeraConsegne ? { riammesso:true, stato:'in_corso', consegnata:false } : { riammesso:true };
-    try{ SB.from('fatt_studenti').update(upd).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
     if(azzeraConsegne){
-      // Cancella TUTTE le sue consegne nel cloud: nessuna fattura risulta più consegnata → tornano da fare.
-      try{ SB.from('fatt_tentativi').delete().eq('pin', pin).neq('modalita', 'compiti').then(function(){}, function(){}); }catch(e){} // Riammetti azzera solo le verifiche, non i compiti a casa
-      if(CLOUD_STUD[pin]){ CLOUD_STUD[pin].stato = 'in_corso'; CLOUD_STUD[pin].consegnata = false; }
+      // RIAMMETTI (dopo consegna): torna IN CORSO e tutte le sue fatture tornano DA CONSEGNARE.
+      try{ SB.from('fatt_studenti').update({ riammesso:true, stato:'in_corso', consegnata:false }).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
+      try{ SB.from('fatt_tentativi').delete().eq('pin', pin).neq('modalita', 'compiti').then(function(){}, function(){}); }catch(e){} // azzera solo le verifiche, non i compiti a casa
+      if(CLOUD_STUD[pin]){ CLOUD_STUD[pin].stato = 'in_corso'; CLOUD_STUD[pin].consegnata = false; CLOUD_STUD[pin].riammesso = true; }
       CLOUD_CONS[pin] = {};
     } else {
-      // Solo sblocco. Se stava LAVORANDO (non ha consegnato), rimuovo le consegne "forzate/non svolte" così,
-      // rientrando, può rifarle davvero. Se invece ha GIÀ CONSEGNATO non tocco nulla: la consegna resta e,
-      // rientrando, vedrà "Verifica consegnata" (per farle rifare la verifica c'è il pulsante "Riammetti").
+      // SBLOCCA (doppio accesso): AUTORITARIO dal docente → azzero SUBITO lo stato bloccato nel cloud (così la
+      // dashboard si sblocca all'istante anche se l'alunno ha chiuso la scheda) e mando comunque il "via libera"
+      // (riammesso) per chi è ancora sulla schermata di blocco. Se aveva GIÀ consegnato resta 'consegnato'.
       var giaCons = !!(CLOUD_STUD[pin] && CLOUD_STUD[pin].consegnata);
+      var upd = giaCons
+        ? { riammesso:true, stato:'consegnato', ultimo_accesso:null, fattura_corrente:null }
+        : { riammesso:true, stato:'non_iniziato', ultimo_accesso:null, fattura_corrente:null, livello_corrente:null };
+      try{ SB.from('fatt_studenti').update(upd).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
       if(!giaCons){ try{ SB.from('fatt_tentativi').delete().eq('pin', pin).eq('modalita', 'forzata').then(function(){}, function(){}); }catch(e){} }
+      if(CLOUD_STUD[pin]){ CLOUD_STUD[pin].stato = (giaCons ? 'consegnato' : 'non_iniziato'); CLOUD_STUD[pin].ultimo_accesso = null; CLOUD_STUD[pin].riammesso = true; }
     }
-    if(CLOUD_STUD[pin]) CLOUD_STUD[pin].riammesso = true;
   }
   /* ---------- Sorvegliante del CAMBIO ASSEGNAZIONE in tempo reale (lato alunno) ---------- */
   function assegnazioniUguali(a, b){
