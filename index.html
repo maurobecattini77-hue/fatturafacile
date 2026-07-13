@@ -874,10 +874,14 @@
     if(!SB) return;
     STATE.consegnaTimer = setInterval(function(){
       if(!STATE.studente || STATE.consegnata){ return; }
-      SB.from('fatt_studenti').select('stato,consegnata').eq('pin', STATE.studente.pin).maybeSingle().then(function(res){
+      SB.from('fatt_studenti').select('stato').eq('pin', STATE.studente.pin).maybeSingle().then(function(res){
         var s = (res && res.data) ? res.data : null;
         if(!s) return;
-        if((s.stato === 'consegnato' || s.stato === 'da_consegnare' || s.consegnata === true) && !STATE.consegnata){ bloccaPerConsegnaDocente(); }
+        // Blocca SOLO se il docente ha segnato "consegnato/da_consegnare" (stato autorevole);
+        // NON usare il flag "consegnata", che i ping di presenza fanno oscillare (causava la ri-blocco dopo Riammetti).
+        // In sessione "riammesso" NON bloccare su "consegnato" (lo rimette l'alunno stesso riconsegnando):
+        // in quel caso solo una vera consegna forzata del docente ("da_consegnare") deve bloccare.
+        if((s.stato === 'da_consegnare' || (s.stato === 'consegnato' && !STATE.riammesso)) && !STATE.consegnata){ bloccaPerConsegnaDocente(); }
       }, function(){});
     }, 2500);
   }
@@ -924,11 +928,13 @@
   // Blocco anti-doppio-accesso: controlla se l'alunno può entrare e aggiorna lo stato.
   function cloudCheckAccesso(pin, cb){
     if(!SB){ cb && cb({ allow:true }); return; }
+    STATE.riammesso = false; // sessione pulita: si accende solo se il cloud dice "riammesso"
     try{
       SB.from('fatt_studenti').select('stato,riammesso').eq('pin', pin).maybeSingle().then(function(res){
         var s = (res && res.data) ? res.data : null;
         var stato = s ? (s.stato || 'non_iniziato') : 'non_iniziato';
         if(s && s.riammesso){
+          STATE.riammesso = true; // il docente lo ha riammesso: potrà rientrare in ogni fattura
           SB.from('fatt_studenti').update({ stato:'in_corso', riammesso:false, consegnata:false }).eq('pin', pin).then(function(){}, function(){});
           cb && cb({ allow:true }); return;
         }
@@ -953,6 +959,72 @@
     // Rimuovi le consegne "forzate/non svolte": così, rientrando, l'alunno può rifarle davvero.
     try{ SB.from('fatt_tentativi').delete().eq('pin', pin).eq('modalita', 'forzata').then(function(){}, function(){}); }catch(e){}
     if(CLOUD_STUD[pin]) CLOUD_STUD[pin].riammesso = true;
+  }
+  /* ---------- Sorvegliante del CAMBIO ASSEGNAZIONE in tempo reale (lato alunno) ---------- */
+  function assegnazioniUguali(a, b){
+    var sa = (a||[]).map(function(x){ return x.id + ':' + x.liv; }).sort().join(';');
+    var sb = (b||[]).map(function(x){ return x.id + ':' + x.liv; }).sort().join(';');
+    return sa === sb;
+  }
+  function stopAssegnazioneWatcher(){ if(STATE.assWatchTimer){ clearInterval(STATE.assWatchTimer); STATE.assWatchTimer = null; } }
+  function startAssegnazioneWatcher(){
+    stopAssegnazioneWatcher();
+    if(!SB) return;
+    STATE.assWatchTimer = setInterval(function(){
+      if(!STATE.studente || STATE.consegnata || STATE.assModaleAperta) return;
+      if(byId('attesa').style.display !== 'none' || byId('blocco').style.display !== 'none') return; // gestiti altrove
+      cloudLeggiContestoAlunno(STATE.studente.pin, function(ctx){
+        if(!STATE.studente || STATE.consegnata || STATE.assModaleAperta) return;
+        if(ctx && ctx.stato === 'consegnato') return;
+        var nuova = ((ctx && ctx.lista) || []).filter(function(x){ return FATTURE.some(function(f){ return f.id === x.id; }); });
+        if(!nuova.length) return;
+        if(assegnazioniUguali(nuova, STATE.mieAssegnate)) return; // nessun cambio
+        var vecchia = STATE.mieAssegnate || [];
+        var nuoveId = {}; nuova.forEach(function(x){ nuoveId[x.id] = true; });
+        var inEditor = (byId('editor').style.display !== 'none') && !!STATE.assegnataId && !STATE.consegnata;
+        var staCompilandoRimossa = inEditor && !nuoveId[STATE.assegnataId];
+        if(staCompilandoRimossa){ chiediCambioAssegnazione(nuova, vecchia); }
+        else { applicaNuovaAssegnazione(nuova); } // aggiornamento silenzioso
+      });
+    }, 3000);
+  }
+  function applicaNuovaAssegnazione(nuova){
+    STATE.mieAssegnate = nuova;
+    STATE.multiMode = nuova.length > 1;
+    // Se è nel menù, ricostruiscilo: le fatture rimosse spariscono, le nuove compaiono. Se sta compilando una
+    // fattura che RESTA, nessun disturbo: la lista in memoria è aggiornata e il menù lo rifletterà al rientro.
+    if(byId('menu-fatture').style.display !== 'none'){ renderMenuFatture(); }
+  }
+  function chiediCambioAssegnazione(nuova, vecchia){
+    STATE.assModaleAperta = true;
+    var ov = document.createElement('div'); ov.className = 'modal-overlay';
+    ov.innerHTML = '<div class="modal-card" style="max-width:540px;">'
+      + '<div class="prev-title" style="padding:18px 26px 4px; font-weight:800; font-size:16px; color:#254a86;">Assegnazione modificata dal docente</div>'
+      + '<div class="modal-body" style="padding:6px 26px 4px; font-size:15px; line-height:1.5;">Il docente ha modificato le fatture assegnate. Vuoi passare alla nuova assegnazione? La fattura che stai compilando verrà rimossa.</div>'
+      + '<div class="modal-actions">'
+        + '<button type="button" class="modal-btn modal-btn-cancel">Rifiuta</button>'
+        + '<button type="button" class="modal-btn modal-btn-ok">Accetta</button>'
+      + '</div></div>';
+    ov.querySelector('.modal-btn-ok').addEventListener('click', function(){
+      closeModal(ov); STATE.assModaleAperta = false;
+      // Accetta: abbandona la fattura corrente (rimossa) e passa alla nuova assegnazione.
+      try{ if(STATE.studente) localStorage.removeItem('ff_lavoro_' + STATE.studente.pin); }catch(e){}
+      STATE.assegnataId = null; STATE.consegnata = false;
+      STATE.mieAssegnate = nuova; STATE.multiMode = nuova.length > 1;
+      if(nuova.length > 1){ mostraMenuFatture(); }
+      else { STATE.assegnataId = nuova[0].id; LIVELLO = Number(nuova[0].liv) || 2; try{ localStorage.setItem('ff_livello', String(nuova[0].liv || 2)); }catch(e){} entraAlunnoView(); }
+    });
+    ov.querySelector('.modal-btn-cancel').addEventListener('click', function(){
+      closeModal(ov); STATE.assModaleAperta = false;
+      // Rifiuta: continua sulla fattura attuale e RIPRISTINA la vecchia assegnazione anche lato docente
+      // (override personale = vecchia lista), così la dashboard torna com'era.
+      if(SB && STATE.studente){
+        try{ SB.from('fatt_studenti').update({ fattura_assegnata: serializeAssegnazione(vecchia), livello_assegnato: (vecchia[0] && vecchia[0].liv!=null ? String(vecchia[0].liv) : null) }).eq('pin', STATE.studente.pin).then(function(){},function(){}); }catch(e){}
+      }
+      STATE.mieAssegnate = vecchia;
+    });
+    document.body.appendChild(ov);
+    ov.querySelector('.modal-btn-ok').focus();
   }
   /* ---------- CONSEGNA FORZATA dal docente (campanella di fine verifica) ----------
      SEMPRE lato docente: marca «non svolta» le fatture non consegnate e segna consegnato.
@@ -1006,6 +1078,7 @@
         var s = (res && res.data) ? res.data : null;
         if(s && s.riammesso){
           stopBloccoWatcher();
+          STATE.riammesso = true; // può rientrare in ogni fattura (anche quelle già consegnate) per rifinirle/rivederle
           try{ SB.from('fatt_studenti').update({ stato:'in_corso', riammesso:false, consegnata:false }).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
           rebuildConsegnateLocali(pin, function(){ cloudLeggiContestoAlunno(pin, avviaAlunnoConLista); });
         }
@@ -1192,12 +1265,14 @@
       if(cell) cell.innerHTML = '<span class="st-badge '+st.cls+'">'+esc(st.txt)+'</span>';
       // se l'alunno si è appena collegato, blocca la tendina di assegnazione (diventa testo)
       var acell = document.querySelector('#roster-body tr[data-pin="'+a.pin+'"] .ass-cell');
-      if(acell && (st.done || st.block || st.part) && (acell.querySelector('select') || acell.querySelector('button'))){
+      var abtn = acell ? acell.querySelector('button.btn-scegli-ass') : null;
+      if(abtn){
+        // Tiene aggiornato il TESTO del pulsante (l'assegnazione resta sempre modificabile).
         var cs2 = CLOUD_STUD[a.pin] || {};
         var perTxt2 = parseAssegnazione(cs2.fattura_assegnata);
         var effList2 = perTxt2.length ? perTxt2 : (STATE.assegnate || []);
-        acell.innerHTML = '<span class="ass-pill">' + esc(descriviAssegnazioneBreve(effList2)) + '</span>';
-        acell.title = descriviAssegnazione(effList2);
+        abtn.textContent = descriviAssegnazioneBreve(effList2);
+        abtn.title = descriviAssegnazione(effList2);
       }
       var azcell = document.querySelector('#roster-body tr[data-pin="'+a.pin+'"] .az-cell');
       if(azcell){
@@ -2143,7 +2218,7 @@
     window.scrollTo(0, 0);
   }
   function goGate(){
-    stopAttesaWatcher(); stopPresenza(); stopCollegatiTimer(); stopBloccoWatcher(); stopConsegnaWatcher(); if(STATE.studente){ cloudClearPresenza(STATE.studente.pin); STATE.studente = null; }
+    stopAttesaWatcher(); stopPresenza(); stopCollegatiTimer(); stopBloccoWatcher(); stopConsegnaWatcher(); stopAssegnazioneWatcher(); STATE.riammesso = false; if(STATE.studente){ cloudClearPresenza(STATE.studente.pin); STATE.studente = null; }
     try{ sessionStorage.removeItem('ff_studente_attivo'); }catch(e){}
     byId('gate-doc').style.display = 'none'; byId('gate-pin').style.display = '';
     byId('in-pin').value = ''; byId('in-pass').value = '';
@@ -2182,8 +2257,10 @@
     var assigned = effectiveAssignedList(pin);
     var multiplo = assigned.length > 1;
     var deliv = deliveredList(pin, assigned);
-    // "Consegnato" pieno: se multiplo → tutte le assegnate consegnate; se singolo → come prima.
-    var allDone = multiplo ? (assigned.length > 0 && deliv.length >= assigned.length)
+    // "Consegnato" pieno: se multiplo → tutte le assegnate consegnate OPPURE lo stato autorevole del cloud
+    // dice "consegnato/consegnata" (l'alunno lo mette solo dopo aver consegnato TUTTE): così non resta
+    // "Consegnato 2" per un semplice ritardo di rilettura del terzo tentativo. Se singolo → come prima.
+    var allDone = multiplo ? (stato === 'consegnato' || s.consegnata || (assigned.length > 0 && deliv.length >= assigned.length))
                            : (stato === 'consegnato' || s.consegnata);
     if(allDone) return { cls:'st-done', txt:'Consegnato', done:true, on:false, corso:false, block:false };
     if(stato === 'bloccato') return { cls:'st-block', txt:'Bloccato', done:false, on:false, corso:false, block:true };
@@ -2235,24 +2312,15 @@
       var tdNome = document.createElement('td'); tdNome.textContent = a.cognome + ' ' + a.nome;
       var tdPin = document.createElement('td'); tdPin.className = 'pin-cell'; tdPin.textContent = a.pin;
       var tdSt = document.createElement('td'); tdSt.className = 'st-cell'; tdSt.innerHTML = '<span class="st-badge ' + st.cls + '">' + esc(st.txt) + '</span>';
-      var connesso = st.done || st.block || st.part; // in corso resta modificabile; consegna parziale no
       var tdAss = document.createElement('td'); tdAss.className = 'ass-cell';
       if(!FATTURE.length){ tdAss.textContent = '—'; }
-      else if(connesso){
-        // collegato/consegnato: mostra le fatture assegnate (forma breve, pillola non cliccabile)
-        var perTxt = parseAssegnazione(cs.fattura_assegnata);
-        var effListC = perTxt.length ? perTxt : (STATE.assegnate || []);
-        var pillC = document.createElement('span'); pillC.className = 'ass-pill';
-        pillC.textContent = descriviAssegnazioneBreve(effListC);
-        pillC.title = descriviAssegnazione(effListC);
-        tdAss.appendChild(pillC);
-      }
       else {
+        // L'assegnazione è SEMPRE modificabile dal docente (anche se l'alunno ha iniziato o consegnato).
         var perList = parseAssegnazione(cs.fattura_assegnata);
         var effList = perList.length ? perList : (STATE.assegnate || []);
         var btnA = document.createElement('button'); btnA.className = 'btn-scegli-ass mini';
         btnA.textContent = descriviAssegnazioneBreve(effList);
-        btnA.title = effList.length ? ('Clicca per modificare le fatture di ' + a.nome + ' (parte da quelle di classe; le modifiche sostituiscono quelle di classe):  ' + descriviAssegnazione(effList)) : 'Clicca per assegnare fatture a questo alunno';
+        btnA.title = effList.length ? ('Clicca per modificare le fatture di ' + a.nome + ':  ' + descriviAssegnazione(effList)) : 'Clicca per assegnare fatture a questo alunno';
         btnA.addEventListener('click', function(){
           openSelezioneFatture(effList, 'Fatture per ' + a.cognome + ' ' + a.nome, function(list){
             cloudAssegnaStudente(a.pin, list.length ? serializeAssegnazione(list) : null, list.length ? (list[0].liv || null) : null);
@@ -2331,8 +2399,10 @@
       var lista = ((ctx && ctx.lista) || []).filter(function(x){ return (typeof FATTURE!=='undefined') && FATTURE.some(function(f){ return f.id === x.id; }); });
       STATE.mieAssegnate = lista;
       STATE.multiMode = lista.length > 1;
+      STATE.consegnata = false; // rientro per lavorare: azzera il flag PRIMA del ping presenza (evita ri-blocco dopo Riammetti)
       startPresenza();
       startConsegnaWatcher();
+      startAssegnazioneWatcher();
       if(lista.length > 1){ mostraMenuFatture(); return; }
       STATE.assegnataId = lista.length ? lista[0].id : null;
       if(lista.length){ try{ localStorage.setItem('ff_livello', String(lista[0].liv || 2)); }catch(e){} }
@@ -2367,14 +2437,20 @@
       var s = document.createElement('div'); s.className = 's'; s.textContent = 'Compilazione ' + (LIV_NOMI[x.liv] || x.liv) + (f && f.difficoltaNome ? (' · difficoltà ' + f.difficoltaNome) : '');
       info.appendChild(t); info.appendChild(s);
       var cta = document.createElement('div'); cta.className = 'menu-cta';
-      if(fatta){ var d = document.createElement('span'); d.className = 'menu-done'; d.textContent = '✓ Consegnata'; cta.appendChild(d); }
+      if(fatta){
+        var d = document.createElement('span'); d.className = 'menu-done'; d.textContent = '✓ Consegnata'; cta.appendChild(d);
+        // Dopo "Riammetti": l'alunno può rientrare anche nelle fatture già consegnate per rifinirle/rivederle.
+        if(STATE.riammesso){ var rb = document.createElement('button'); rb.className = 'btn-compila'; rb.textContent = 'Rientra'; rb.style.marginLeft = '8px'; rb.addEventListener('click', function(){ apriFatturaMenu(x); }); cta.appendChild(rb); }
+      }
       else { var b = document.createElement('button'); b.className = 'btn-compila'; b.textContent = 'Compila'; b.addEventListener('click', function(){ apriFatturaMenu(x); }); cta.appendChild(b); }
       row.appendChild(num); row.appendChild(info); row.appendChild(cta);
       list.appendChild(row);
     });
-    byId('menu-sub').textContent = restanti > 0
-      ? ('Scegli una fattura da compilare. Te ne ' + (restanti === 1 ? 'manca 1' : ('mancano ' + restanti)) + '.')
-      : 'Hai consegnato tutte le fatture assegnate. Ottimo lavoro! Ora puoi uscire.';
+    byId('menu-sub').textContent = STATE.riammesso
+      ? 'Il docente ti ha riammesso: puoi rientrare in ogni fattura per rifinirla o rivederla, poi consegnarla di nuovo.'
+      : (restanti > 0
+        ? ('Scegli una fattura da compilare. Te ne ' + (restanti === 1 ? 'manca 1' : ('mancano ' + restanti)) + '.')
+        : 'Hai consegnato tutte le fatture assegnate. Ottimo lavoro! Ora puoi uscire.');
   }
   function apriFatturaMenu(x){
     STATE.assegnataId = x.id; STATE.consegnata = false;
