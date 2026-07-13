@@ -964,23 +964,33 @@
     if(!SB){ cb && cb({ allow:true }); return; }
     STATE.riammesso = false; // sessione pulita: si accende solo se il cloud dice "riammesso"
     try{
-      SB.from('fatt_studenti').select('stato,riammesso,ultimo_accesso').eq('pin', pin).maybeSingle().then(function(res){
+      SB.from('fatt_studenti').select('stato,riammesso,ultimo_accesso,consegnata').eq('pin', pin).maybeSingle().then(function(res){
         var s = (res && res.data) ? res.data : null;
         var stato = s ? (s.stato || 'non_iniziato') : 'non_iniziato';
         var eta = (s && s.ultimo_accesso) ? (Date.now() - new Date(s.ultimo_accesso).getTime()) : Infinity;
         var ownerAttivo = eta < 45000; // il proprietario ha "pingato" da meno di 45s → è ancora collegato
         // (1) Sblocco/riammissione del docente: lo può prendere UN dispositivo SOLO (claim ATOMICO su riammesso):
         //     il primo che lo "gira" a false vince, gli altri restano bloccati. Niente più "si sbloccano tutti".
+        //     ATTENZIONE: se la verifica era GIÀ CONSEGNATA (consegnata=true) è un puro SBLOCCO, NON una riammissione:
+        //     tolgo solo il blocco e la rimando alla schermata "Verifica consegnata" (niente lavoro riaperto).
         if(s && s.riammesso){
-          SB.from('fatt_studenti').update({ stato:'in_corso', riammesso:false, consegnata:false }).eq('pin', pin).eq('riammesso', true).select().then(function(r2){
+          var eraCons = !!s.consegnata;
+          var claim = eraCons ? { riammesso:false, stato:'consegnato' } : { stato:'in_corso', riammesso:false, consegnata:false };
+          SB.from('fatt_studenti').update(claim).eq('pin', pin).eq('riammesso', true).select().then(function(r2){
             var vinto = r2 && r2.data && r2.data.length > 0;
-            if(vinto){ STATE.riammesso = true; cb && cb({ allow:true }); }
-            else { cb && cb({ allow:false }); }
+            if(!vinto){ cb && cb({ allow:false }); return; }
+            if(eraCons){ cb && cb({ allow:false, consegnata:true }); }   // → schermata "Verifica consegnata"
+            else { STATE.riammesso = true; cb && cb({ allow:true }); }
           }, function(){ cb && cb({ allow:true }); });
           return;
         }
-        // (2) Verifica già consegnata → solo il docente può riammettere.
-        if(stato === 'consegnato'){ cb && cb({ allow:false }); return; }
+        // (2) Verifica già consegnata → solo il docente può riammettere. Segnalo 'bloccato' (SENZA toccare la
+        //     consegna: consegnata resta true) così il docente vede che sta "bussando" e può Sbloccarla/Riammetterla.
+        if(stato === 'consegnato'){
+          SB.from('fatt_studenti').update({ stato:'bloccato' }).eq('pin', pin).then(function(){}, function(){});
+          if(CLOUD_STUD[pin]) CLOUD_STUD[pin].stato = 'bloccato';
+          cb && cb({ allow:false }); return;
+        }
         // (3) Qualcuno sta GIÀ lavorando con questa PIN (proprietario ATTIVO) → sei un doppione: bloccato,
         //     SENZA toccare lo stato, così il proprietario resta "in corso" e il docente NON lo vede bloccato.
         if((stato === 'in_corso' || stato === 'bloccato') && ownerAttivo){ cb && cb({ allow:false }); return; }
@@ -1016,8 +1026,11 @@
       if(CLOUD_STUD[pin]){ CLOUD_STUD[pin].stato = 'in_corso'; CLOUD_STUD[pin].consegnata = false; }
       CLOUD_CONS[pin] = {};
     } else {
-      // Solo sblocco: rimuovi le consegne "forzate/non svolte" così, rientrando, l'alunno può rifarle davvero.
-      try{ SB.from('fatt_tentativi').delete().eq('pin', pin).eq('modalita', 'forzata').then(function(){}, function(){}); }catch(e){}
+      // Solo sblocco. Se stava LAVORANDO (non ha consegnato), rimuovo le consegne "forzate/non svolte" così,
+      // rientrando, può rifarle davvero. Se invece ha GIÀ CONSEGNATO non tocco nulla: la consegna resta e,
+      // rientrando, vedrà "Verifica consegnata" (per farle rifare la verifica c'è il pulsante "Riammetti").
+      var giaCons = !!(CLOUD_STUD[pin] && CLOUD_STUD[pin].consegnata);
+      if(!giaCons){ try{ SB.from('fatt_tentativi').delete().eq('pin', pin).eq('modalita', 'forzata').then(function(){}, function(){}); }catch(e){} }
     }
     if(CLOUD_STUD[pin]) CLOUD_STUD[pin].riammesso = true;
   }
@@ -1179,16 +1192,25 @@
       if(!STATE.studente){ stopBloccoWatcher(); return; }
       var pin = STATE.studente.pin;
       if(STATE.sbloccoInCorso) return;
-      SB.from('fatt_studenti').select('stato,riammesso,ultimo_accesso').eq('pin', pin).maybeSingle().then(function(res){
+      SB.from('fatt_studenti').select('stato,riammesso,ultimo_accesso,consegnata').eq('pin', pin).maybeSingle().then(function(res){
         var s = (res && res.data) ? res.data : null;
         if(!s) return;
         if(s.riammesso){
           // Sblocco del docente: lo prende UN dispositivo solo (claim ATOMICO). Gli altri restano bloccati.
           STATE.sbloccoInCorso = true;
-          SB.from('fatt_studenti').update({ stato:'in_corso', riammesso:false, consegnata:false }).eq('pin', pin).eq('riammesso', true).select().then(function(r2){
+          var eraCons = !!s.consegnata; // verifica GIÀ consegnata → puro sblocco: NON riaprire il lavoro.
+          var claim = eraCons ? { riammesso:false, stato:'consegnato' } : { stato:'in_corso', riammesso:false, consegnata:false };
+          SB.from('fatt_studenti').update(claim).eq('pin', pin).eq('riammesso', true).select().then(function(r2){
             STATE.sbloccoInCorso = false;
             var vinto = r2 && r2.data && r2.data.length > 0;
             if(!vinto) return; // un altro dispositivo ha già preso lo sblocco → resto bloccato
+            if(eraCons){
+              // Solo sblocco di una verifica già consegnata: resta su "Verifica consegnata", niente lavoro.
+              // Tengo il watcher attivo: se poi il docente la RIAMMETTE (consegnata=false), rientrerà a lavorare.
+              STATE.consegnata = true;
+              mostraBloccoMsg('✅', 'Verifica consegnata', 'Il docente ti ha sbloccato: la tua verifica resta consegnata. Se ti riammette, potrai rientrare.', '#2f7d54');
+              return;
+            }
             stopBloccoWatcher();
             STATE.riammesso = true;
             rebuildConsegnateLocali(pin, function(){ cloudLeggiContestoAlunno(pin, avviaAlunnoConLista); });
@@ -2381,6 +2403,9 @@
     // "Consegnato 2" per un semplice ritardo di rilettura del terzo tentativo. Se singolo → come prima.
     var allDone = multiplo ? (stato === 'consegnato' || s.consegnata || (assigned.length > 0 && deliv.length >= assigned.length))
                            : (stato === 'consegnato' || s.consegnata);
+    // Ha consegnato MA risulta 'bloccato' (sta "bussando" dopo la consegna): resta "Consegnato",
+    // ma offro lo SBLOCCO (toglie il blocco SENZA riaprire il lavoro). Dopo lo sblocco torna "Consegnato" + Riammetti.
+    if(allDone && stato === 'bloccato') return { cls:'st-done', txt:'Consegnato', done:true, on:false, corso:false, block:true };
     if(allDone) return { cls:'st-done', txt:'Consegnato', done:true, on:false, corso:false, block:false };
     if(stato === 'bloccato') return { cls:'st-block', txt:'Bloccato', done:false, on:false, corso:false, block:true };
     var recent = s.ultimo_accesso && (Date.now() - new Date(s.ultimo_accesso).getTime() < 120000);
@@ -2401,7 +2426,14 @@
     var b = document.createElement('button');
     if(want === 'sblocca'){
       b.className = 'btn-sblocca'; b.textContent = '🔓 Sblocca';
-      b.addEventListener('click', function(){ cloudRiammetti(a.pin, false); showAlert(a.cognome + ' ' + a.nome + ' è stato sbloccato: può rientrare e riprendere da dove aveva lasciato.'); refreshCloudStud(function(){ refreshConsegne(renderDocente); }); });
+      b.addEventListener('click', function(){
+        var giaCons = !!(CLOUD_STUD[a.pin] && CLOUD_STUD[a.pin].consegnata);
+        cloudRiammetti(a.pin, false);
+        showAlert(a.cognome + ' ' + a.nome + (giaCons
+          ? ' è stato sbloccato: vedrà "Verifica consegnata" e la consegna resta. Usa "Riammetti" se vuoi farle rifare la verifica.'
+          : ' è stato sbloccato: può rientrare e riprendere da dove aveva lasciato.'));
+        refreshCloudStud(function(){ refreshConsegne(renderDocente); });
+      });
     } else if(want === 'riammetti'){
       b.className = 'btn-riammetti'; b.textContent = 'Riammetti';
       b.addEventListener('click', function(){ cloudRiammetti(a.pin, true); showAlert(a.cognome + ' ' + a.nome + ' è stato riammesso: le sue fatture tornano da consegnare (ritrova il suo lavoro) e potrà riconsegnarle.'); refreshCloudStud(function(){ refreshConsegne(renderDocente); }); });
@@ -2907,7 +2939,12 @@
     cloudCheckAccesso(al.pin, function(acc){
       if(acc && acc.allow === false){
         var bn = byId('blocco-nome'); if(bn) bn.textContent = al.cognome + ' ' + al.nome;
-        mostraBloccoMsg('🔒', 'Accesso bloccato', 'Hai già effettuato l\'accesso in precedenza. Per continuare, chiedi lo sblocco al docente.', '#b4472f');
+        if(acc.consegnata){
+          // Docente ha già sbloccato una verifica CONSEGNATA: mostra "Verifica consegnata", NON riaprire il lavoro.
+          mostraBloccoMsg('✅', 'Verifica consegnata', 'La tua verifica è consegnata. Se il docente ti riammette, potrai rientrare.', '#2f7d54');
+        } else {
+          mostraBloccoMsg('🔒', 'Accesso bloccato', 'Hai già effettuato l\'accesso in precedenza. Per continuare, chiedi lo sblocco al docente.', '#b4472f');
+        }
         startBloccoWatcher();
         return;
       }
