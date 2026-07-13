@@ -2548,7 +2548,15 @@
     var top = byId('topbar-info'); top.innerHTML = '';
     var span = document.createElement('span'); span.textContent = STATE.studente.cognome + ' ' + STATE.studente.nome + ' · classe ' + CLASSE.classe;
     var out = document.createElement('span'); out.className = 'link'; out.textContent = 'Esci'; out.addEventListener('click', goGate);
-    top.appendChild(span); top.appendChild(out);
+    top.appendChild(span);
+    // Alunno con più fatture: link per tornare al menù SENZA consegnare, per provare/finire le altre.
+    // Il lavoro di questa fattura resta salvato (chiave ff_lavoro per fattura) e si ritrova riaprendola.
+    if(STATE.multiMode && STATE.studente){
+      var toMenu = document.createElement('span'); toMenu.className = 'link'; toMenu.textContent = '← Le mie fatture'; toMenu.style.marginRight = '14px';
+      toMenu.addEventListener('click', function(){ salvaLavoro(); mostraMenuFatture(); });
+      top.appendChild(toMenu);
+    }
+    top.appendChild(out);
     byId('cortesia-banner').innerHTML = 'Questa è la <b>tua</b> copia di cortesia, con i valori che hai inserito. Controlla bene prima di consegnare.';
     byId('btnChiudi').style.display = ''; byId('btnIndietro').style.display = '';
     cloudPresenza();
