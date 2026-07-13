@@ -1261,12 +1261,36 @@
       setTimeout(function(){ if(a.parentNode) a.parentNode.removeChild(a); URL.revokeObjectURL(url); }, 800);
     }catch(e){ showAlert('Download non riuscito: '+e.message); }
   }
+  // Costruisce e SCARICA il documento HTML interattivo dell'export. Usato SIA dalle verifiche SIA dai compiti:
+  // riceve già l'array `data` (uno per alunno, con le sue fatture) e produce lo stesso visualizzatore a schede.
+  function buildExportDoc(data, cl, titolo, filePrefix){
+    var css=''; document.querySelectorAll('style').forEach(function(st){ css += st.textContent + '\n'; });
+    var dataJson = JSON.stringify(data).replace(/<\//g, '<\\/');
+    var xcss = ' body{background:#eef0ea;margin:0;} .exp-head{background:#e8f0fb;border-bottom:1px solid #d3e0f2;padding:16px 28px;display:flex;align-items:center;gap:14px;} .exp-wrap{max-width:1440px;margin:22px auto;padding:0 16px;} .exp-tbl{width:100%;border-collapse:collapse;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 6px 20px rgba(0,0,0,.06);} .exp-tbl th,.exp-tbl td{padding:13px 18px;text-align:left;border-bottom:1px solid #eee;} .exp-tbl tbody tr{cursor:pointer;} .exp-tbl tbody tr:hover{background:#f4f6f2;} .exp-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0;} .exp-tab{border:1px solid #cfd8e6;background:#fff;border-radius:10px;padding:8px 14px;cursor:pointer;font-weight:700;font-size:14px;white-space:nowrap;} .exp-tab.active{background:#254a86;color:#fff;border-color:#254a86;} .exp-back{cursor:pointer;color:#254a86;font-weight:700;margin-bottom:12px;display:inline-block;} .exp-content{background:#fff;border-radius:14px;padding:16px;} .exp-fatt{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px;} .exp-fbtn{border:1px solid #cdd8e6;background:#f4f7fb;border-radius:9px;padding:6px 14px;cursor:pointer;font-weight:700;font-size:13px;white-space:nowrap;} .exp-fbtn.active{background:#5c8b73;color:#fff;border-color:#5c8b73;} .exp-vuota{padding:26px;text-align:center;color:#b4472f;font-weight:700;font-size:16px;} ';
+    var js = 'var DATA=' + dataJson + ';'
+      + 'function E(s){return (s==null?"":String(s)).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}'
+      + 'function over(){var h=\'<table class="exp-tbl"><thead><tr><th style="width:120px">PIN</th><th>Studente</th><th>Esercizi consegnati</th></tr></thead><tbody>\';for(var i=0;i<DATA.length;i++){var d=DATA[i];h+=\'<tr data-i="\'+i+\'"><td><b>\'+E(d.pin)+\'</b></td><td>\'+E(d.nome)+\'</td><td>\'+E(d.nums)+\'</td></tr>\';}h+=\'</tbody></table>\';var ov=document.getElementById("exp-over");ov.innerHTML=h;ov.style.display="";document.getElementById("exp-det").style.display="none";var tr=ov.querySelectorAll("tbody tr");for(var k=0;k<tr.length;k++){tr[k].onclick=function(){det(this.getAttribute("data-i"));};}}'
+      + 'function det(i){var d=DATA[i];var cogn=(d.cognome||((d.nome||"").split(" ")[0])||"");document.getElementById("exp-over").style.display="none";var el=document.getElementById("exp-det");el.style.display="";'
+      + 'var h=\'<span class="exp-back">&#8592; Elenco</span><h2 style="color:#254a86">\'+E(d.nome)+\'</h2><div class="exp-fatt">\';'
+      + 'for(var k=0;k<d.fatture.length;k++){h+=\'<button class="exp-fbtn\'+(k===0?" active":"")+\'" data-f="\'+k+\'">Fattura \'+E(d.fatture[k].num)+\'</button>\';}'
+      + 'h+=\'</div><div class="exp-tabs"><button class="exp-tab active" data-t="0">Fattura \'+E(cogn)+\'</button><button class="exp-tab" data-t="1">Fattura corretta</button><button class="exp-tab" data-t="2">Dashboard \'+E(cogn)+\'</button><button class="exp-tab" data-t="3">Dashboard corretta</button></div><div class="exp-content" id="exp-c"></div>\';'
+      + 'el.innerHTML=h;el.querySelector(".exp-back").onclick=over;var cf=0,ct="0";var fb=el.querySelectorAll(".exp-fbtn");var tb=el.querySelectorAll(".exp-tab");'
+      + 'function render(){var f=d.fatture[cf];var c=document.getElementById("exp-c");var NS=\'<div class="exp-vuota">Questa fattura non è stata svolta.</div>\';if(ct==="0"){c.innerHTML=f.nonSvolta?NS:(\'<div class="cx-page">\'+(f.cortesiaAlunno||"<i>&#8212;</i>")+\'</div>\');}else if(ct==="1"){c.innerHTML=\'<div class="cx-page">\'+(f.cortesiaCorretta||"<i>&#8212;</i>")+\'</div>\';}else if(ct==="2"){c.innerHTML=f.nonSvolta?NS:(\'<div id="editor" class="wrap sol-mode">\'+(f.dashboardAlunno||"")+\'</div>\');}else{c.innerHTML=\'<div id="editor" class="wrap sol-mode">\'+(f.dashboardCorretta||"")+\'</div>\';}}'
+      + 'for(var a=0;a<fb.length;a++){fb[a].onclick=function(){cf=+this.getAttribute("data-f");for(var x=0;x<fb.length;x++){fb[x].className="exp-fbtn";}this.className="exp-fbtn active";render();};}'
+      + 'for(var b=0;b<tb.length;b++){tb[b].onclick=function(){ct=this.getAttribute("data-t");for(var y=0;y<tb.length;y++){tb[y].className="exp-tab";}this.className="exp-tab active";render();};}'
+      + 'render();}'
+      + 'over();';
+    var doc = '<!DOCTYPE html><html lang="it"><head><meta charset="utf-8"><title>' + esc(titolo) + ' ' + esc(cl) + '</title><style>' + css + xcss + '</style></head><body>'
+      + '<div class="exp-head"><div class="ff-badge"><span class="ff">FF</span><span class="fold"></span></div><div class="ff-word">Fattura<br/>Facile</div><div style="margin-left:auto;text-align:right;color:#254a86;"><div style="font-weight:700;font-size:18px;">' + (cl ? ('Classe ' + esc(cl) + ' &#183; ') : '') + esc(titolo) + '</div><div style="font-size:13px;color:#5b6b82;margin-top:2px;">' + esc(new Date().toLocaleString('it-IT')) + ' &#183; ' + data.length + (data.length===1?' alunno':' alunni') + '</div></div></div>'
+      + '<div class="exp-wrap"><div id="exp-over"></div><div id="exp-det" style="display:none;"></div></div>'
+      + '<scr' + 'ipt>' + js + '</scr' + 'ipt></body></html>';
+    ff_download(filePrefix + '_' + (cl||'classe') + '_' + ff_dateStamp() + '.html', doc, 'text/html');
+  }
   function esportaHTML(){
     if(!SB){ showAlert('Cloud non disponibile.'); return; }
     SB.from('fatt_tentativi').select('pin,fattura_id,risposte,created_at').eq('completato', true).order('created_at', {ascending:true}).then(function(res){
       var rows = (res && res.data) ? res.data : [];
       if(!rows.length){ showAlert('Nessuna consegna da esportare al momento.'); return; }
-      var css=''; document.querySelectorAll('style').forEach(function(st){ css += st.textContent + '\n'; });
       // Raggruppa le consegne per alunno (ultima consegna per ciascuna fattura: le righe sono ordinate per created_at crescente).
       var byPin = {};
       rows.forEach(function(r){ var rr=r.risposte||{}; if(!byPin[r.pin]) byPin[r.pin]={}; byPin[r.pin][r.fattura_id] = { titolo:(rr.titolo||r.fattura_id||''), nonSvolta:(rr.nonSvolta||false), cortesiaAlunno:(rr.cortesiaAlunno||''), cortesiaCorretta:(rr.cortesiaCorretta||''), dashboardAlunno:(rr.dashboardAlunno||''), dashboardCorretta:(rr.dashboardCorretta||''), cognome:(rr.cognome||''), nome:(rr.nome||'') }; });
@@ -1289,28 +1313,28 @@
       });
       data.sort(function(a,b){ return (a.cognome||a.nome).localeCompare((b.cognome||b.nome), 'it'); });
       if(!data.length){ showAlert('Nessun alunno ha ancora consegnato tutte le fatture assegnate.'); return; }
-      var cl = (CLASSE&&CLASSE.classe)||'';
-      var dataJson = JSON.stringify(data).replace(/<\//g, '<\\/');
-      var xcss = ' body{background:#eef0ea;margin:0;} .exp-head{background:#e8f0fb;border-bottom:1px solid #d3e0f2;padding:16px 28px;display:flex;align-items:center;gap:14px;} .exp-wrap{max-width:1440px;margin:22px auto;padding:0 16px;} .exp-tbl{width:100%;border-collapse:collapse;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 6px 20px rgba(0,0,0,.06);} .exp-tbl th,.exp-tbl td{padding:13px 18px;text-align:left;border-bottom:1px solid #eee;} .exp-tbl tbody tr{cursor:pointer;} .exp-tbl tbody tr:hover{background:#f4f6f2;} .exp-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0;} .exp-tab{border:1px solid #cfd8e6;background:#fff;border-radius:10px;padding:8px 14px;cursor:pointer;font-weight:700;font-size:14px;white-space:nowrap;} .exp-tab.active{background:#254a86;color:#fff;border-color:#254a86;} .exp-back{cursor:pointer;color:#254a86;font-weight:700;margin-bottom:12px;display:inline-block;} .exp-content{background:#fff;border-radius:14px;padding:16px;} .exp-fatt{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px;} .exp-fbtn{border:1px solid #cdd8e6;background:#f4f7fb;border-radius:9px;padding:6px 14px;cursor:pointer;font-weight:700;font-size:13px;white-space:nowrap;} .exp-fbtn.active{background:#5c8b73;color:#fff;border-color:#5c8b73;} .exp-vuota{padding:26px;text-align:center;color:#b4472f;font-weight:700;font-size:16px;} ';
-      var js = 'var DATA=' + dataJson + ';'
-        + 'function E(s){return (s==null?"":String(s)).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}'
-        + 'function over(){var h=\'<table class="exp-tbl"><thead><tr><th style="width:120px">PIN</th><th>Studente</th><th>Esercizi consegnati</th></tr></thead><tbody>\';for(var i=0;i<DATA.length;i++){var d=DATA[i];h+=\'<tr data-i="\'+i+\'"><td><b>\'+E(d.pin)+\'</b></td><td>\'+E(d.nome)+\'</td><td>\'+E(d.nums)+\'</td></tr>\';}h+=\'</tbody></table>\';var ov=document.getElementById("exp-over");ov.innerHTML=h;ov.style.display="";document.getElementById("exp-det").style.display="none";var tr=ov.querySelectorAll("tbody tr");for(var k=0;k<tr.length;k++){tr[k].onclick=function(){det(this.getAttribute("data-i"));};}}'
-        + 'function det(i){var d=DATA[i];var cogn=(d.cognome||((d.nome||"").split(" ")[0])||"");document.getElementById("exp-over").style.display="none";var el=document.getElementById("exp-det");el.style.display="";'
-        + 'var h=\'<span class="exp-back">&#8592; Elenco</span><h2 style="color:#254a86">\'+E(d.nome)+\'</h2><div class="exp-fatt">\';'
-        + 'for(var k=0;k<d.fatture.length;k++){h+=\'<button class="exp-fbtn\'+(k===0?" active":"")+\'" data-f="\'+k+\'">Fattura \'+E(d.fatture[k].num)+\'</button>\';}'
-        + 'h+=\'</div><div class="exp-tabs"><button class="exp-tab active" data-t="0">Fattura \'+E(cogn)+\'</button><button class="exp-tab" data-t="1">Fattura corretta</button><button class="exp-tab" data-t="2">Dashboard \'+E(cogn)+\'</button><button class="exp-tab" data-t="3">Dashboard corretta</button></div><div class="exp-content" id="exp-c"></div>\';'
-        + 'el.innerHTML=h;el.querySelector(".exp-back").onclick=over;var cf=0,ct="0";var fb=el.querySelectorAll(".exp-fbtn");var tb=el.querySelectorAll(".exp-tab");'
-        + 'function render(){var f=d.fatture[cf];var c=document.getElementById("exp-c");var NS=\'<div class="exp-vuota">Questa fattura non è stata svolta.</div>\';if(ct==="0"){c.innerHTML=f.nonSvolta?NS:(\'<div class="cx-page">\'+(f.cortesiaAlunno||"<i>&#8212;</i>")+\'</div>\');}else if(ct==="1"){c.innerHTML=\'<div class="cx-page">\'+(f.cortesiaCorretta||"<i>&#8212;</i>")+\'</div>\';}else if(ct==="2"){c.innerHTML=f.nonSvolta?NS:(\'<div id="editor" class="wrap sol-mode">\'+(f.dashboardAlunno||"")+\'</div>\');}else{c.innerHTML=\'<div id="editor" class="wrap sol-mode">\'+(f.dashboardCorretta||"")+\'</div>\';}}'
-        + 'for(var a=0;a<fb.length;a++){fb[a].onclick=function(){cf=+this.getAttribute("data-f");for(var x=0;x<fb.length;x++){fb[x].className="exp-fbtn";}this.className="exp-fbtn active";render();};}'
-        + 'for(var b=0;b<tb.length;b++){tb[b].onclick=function(){ct=this.getAttribute("data-t");for(var y=0;y<tb.length;y++){tb[y].className="exp-tab";}this.className="exp-tab active";render();};}'
-        + 'render();}'
-        + 'over();';
-      var doc = '<!DOCTYPE html><html lang="it"><head><meta charset="utf-8"><title>Consegne ' + esc(cl) + '</title><style>' + css + xcss + '</style></head><body>'
-        + '<div class="exp-head"><div class="ff-badge"><span class="ff">FF</span><span class="fold"></span></div><div class="ff-word">Fattura<br/>Facile</div><div style="margin-left:auto;text-align:right;color:#254a86;"><div style="font-weight:700;font-size:18px;">Classe ' + esc(cl) + ' &#183; Consegne</div><div style="font-size:13px;color:#5b6b82;margin-top:2px;">' + esc(new Date().toLocaleString('it-IT')) + ' &#183; ' + data.length + (data.length===1?' alunno':' alunni') + '</div></div></div>'
-        + '<div class="exp-wrap"><div id="exp-over"></div><div id="exp-det" style="display:none;"></div></div>'
-        + '<scr' + 'ipt>' + js + '</scr' + 'ipt></body></html>';
-      ff_download('consegne_' + (cl||'classe') + '_' + ff_dateStamp() + '.html', doc, 'text/html');
+      buildExportDoc(data, (CLASSE&&CLASSE.classe)||'', 'Consegne', 'consegne');
     }, function(){ showAlert('Errore nel recupero delle consegne.'); });
+  }
+  // Export dei COMPITI A CASA: come l'export verifiche, ma prende TUTTI i compiti consegnati (modalita='compiti'),
+  // senza il vincolo dell'assegnazione (nei compiti l'alunno sceglie da sé quali fare).
+  function esportaCompitiHTML(){
+    if(!SB){ showAlert('Cloud non disponibile.'); return; }
+    SB.from('fatt_tentativi').select('pin,fattura_id,risposte,created_at').eq('modalita', 'compiti').eq('completato', true).order('created_at', {ascending:true}).then(function(res){
+      var rows = (res && res.data) ? res.data : [];
+      if(!rows.length){ showAlert('Nessun compito da esportare.'); return; }
+      var byPin = {};
+      rows.forEach(function(r){ var rr=r.risposte||{}; if(!byPin[r.pin]) byPin[r.pin]={ nome:(rr.nome||r.pin), cognome:(rr.cognome||''), items:{} }; byPin[r.pin].items[r.fattura_id] = { titolo:(rr.titolo||r.fattura_id||''), cortesiaAlunno:(rr.cortesiaAlunno||''), cortesiaCorretta:(rr.cortesiaCorretta||''), dashboardAlunno:(rr.dashboardAlunno||''), dashboardCorretta:(rr.dashboardCorretta||'') }; });
+      var data = [];
+      Object.keys(byPin).forEach(function(pin){
+        var s = byPin[pin];
+        var ids = Object.keys(s.items).sort(function(a,b){ return (parseInt(numeroFattura(a),10)||0)-(parseInt(numeroFattura(b),10)||0); });
+        var fatture = ids.map(function(id){ var t=s.items[id]; return { num:numeroFattura(id), titolo:t.titolo, nonSvolta:false, cortesiaAlunno:t.cortesiaAlunno, cortesiaCorretta:t.cortesiaCorretta, dashboardAlunno:t.dashboardAlunno, dashboardCorretta:t.dashboardCorretta }; });
+        data.push({ pin:pin, nome:s.nome, cognome:s.cognome, nums:fatture.map(function(f){ return f.num; }).join(' · '), fatture:fatture });
+      });
+      data.sort(function(a,b){ return (a.cognome||a.nome).localeCompare((b.cognome||b.nome), 'it'); });
+      buildExportDoc(data, (CLASSE&&CLASSE.classe)||'', 'Compiti a casa', 'compiti');
+    }, function(){ showAlert('Errore nel recupero dei compiti.'); });
   }
   function backupClasse(){
     if(!SB){ showAlert('Cloud non disponibile.'); return; }
@@ -3148,8 +3172,10 @@
       row.appendChild(num); row.appendChild(info); row.appendChild(cta); list.appendChild(row);
     });
     if(pins.length){
-      var svu = document.createElement('button'); svu.className = 'btn-ghost'; svu.textContent = '🗑 Svuota archivio compiti'; svu.style.cssText = 'margin-top:14px; color:#b4472f;';
-      svu.addEventListener('click', svuotaArchivioCompiti); list.appendChild(svu);
+      var azioni = document.createElement('div'); azioni.style.cssText = 'margin-top:16px; display:flex; gap:10px; flex-wrap:wrap;';
+      var exp = document.createElement('button'); exp.className = 'btn-ghost'; exp.textContent = '⬇ Esporta archivio'; exp.addEventListener('click', esportaCompitiHTML);
+      var svu = document.createElement('button'); svu.className = 'btn-ghost'; svu.style.color = '#b4472f'; svu.textContent = '🗑 Svuota archivio compiti'; svu.addEventListener('click', svuotaArchivioCompiti);
+      azioni.appendChild(exp); azioni.appendChild(svu); list.appendChild(azioni);
     }
     var esci = byId('btn-esci-menu'); if(esci) esci.textContent = '← Torna alla dashboard';
     show('menu-fatture');
