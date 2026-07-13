@@ -1404,6 +1404,11 @@
       var alunni = j.studenti.map(function(s){ return { pin:s.pin, nome:s.nome, cognome:s.cognome }; });
       CLASSE = { classe:classe, alunni:alunni };
       localStorage.setItem('ff_classe', JSON.stringify(CLASSE));
+      // La classe ripristinata torna SUBITO in dashboard, com'era prima del Reset: la tolgo dalla
+      // modalità compiti LOCALE (il Reset ce l'aveva messa e nascosta) e la rendo la classe attiva,
+      // senza dover ripassare da «Carica classe». Il valore giusto è quello salvato nel backup.
+      STATE.compitiClassi = (j.config && Array.isArray(j.config.compiti_classi)) ? j.config.compiti_classi.slice() : (STATE.compitiClassi || []).filter(function(x){ return x !== classe; });
+      STATE.classeAttiva = classe;
       if(j.config && j.config.archivio){ FATTURE = adattaArchivio(j.config.archivio); localStorage.setItem('ff_archivio', JSON.stringify(FATTURE)); }
       if(j.config && j.config.assegnata_id){ STATE.assegnate = parseAssegnazione(j.config.assegnata_id); STATE.assegnataId = assegnPrimoId(j.config.assegnata_id); localStorage.setItem('ff_assegnata', j.config.assegnata_id); }
       else { STATE.assegnate = []; STATE.assegnataId = null; try{ localStorage.removeItem('ff_assegnata'); }catch(e){} }
