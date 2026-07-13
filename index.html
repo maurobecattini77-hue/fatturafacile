@@ -397,6 +397,7 @@
     <input type="file" id="file-verifica" accept=".json,application/json" style="display:none;" />
     <button class="btn-consegna" id="btn-consegna-classe"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:7px;"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4z"/></svg>Consegna classe</button>
     <button class="btn-ghost" id="btn-esporta-html">Esporta HTML</button>
+    <button class="btn-ghost" id="btn-archivio-compiti">📚 Archivio compiti</button>
     <button class="btn-ghost" id="btn-backup">Backup</button>
     <button class="btn-ghost" id="btn-ripristina">Ripristina</button>
     <input type="file" id="file-ripristina" accept=".json,application/json" style="display:none;" />
@@ -870,7 +871,7 @@
   /* Cattura e salva nel cloud la consegna della fattura CORRENTE (senza mostrare viste). */
   function catturaConsegnaCorrente(){
     if(!STATE.studente || !STATE.assegnataId) return;
-    aggiungiConsegnataLocale(STATE.studente.pin, STATE.assegnataId);
+    if(!STATE.modalitaCompiti) aggiungiConsegnataLocale(STATE.studente.pin, STATE.assegnataId); // in compiti la "verità" è il cloud (modalita='compiti'), niente marker verifica
     commitValues(byId('editor'));
     lockEditor();
     STATE.myDashboardHTML = byId('editor').innerHTML;
@@ -957,7 +958,7 @@
     if(!SB) return;
     try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false }).gte('pin', '').then(function(){}, function(){}); }catch(e){}
     try{ SB.from('fatt_config').update({ assegnata_id:null, livello:null }).eq('id', 1).then(function(){}, function(){}); }catch(e){}
-    try{ SB.from('fatt_tentativi').delete().gte('created_at', '2000-01-01').then(function(){}, function(){}); }catch(e){}
+    try{ SB.from('fatt_tentativi').delete().neq('modalita', 'compiti').gte('created_at', '2000-01-01').then(function(){}, function(){}); }catch(e){} // il Reset NON tocca l'archivio compiti a casa
   }
   // Blocco anti-doppio-accesso: controlla se l'alunno può entrare e aggiorna lo stato.
   function cloudCheckAccesso(pin, cb){
@@ -1022,7 +1023,7 @@
     try{ SB.from('fatt_studenti').update(upd).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
     if(azzeraConsegne){
       // Cancella TUTTE le sue consegne nel cloud: nessuna fattura risulta più consegnata → tornano da fare.
-      try{ SB.from('fatt_tentativi').delete().eq('pin', pin).then(function(){}, function(){}); }catch(e){}
+      try{ SB.from('fatt_tentativi').delete().eq('pin', pin).neq('modalita', 'compiti').then(function(){}, function(){}); }catch(e){} // Riammetti azzera solo le verifiche, non i compiti a casa
       if(CLOUD_STUD[pin]){ CLOUD_STUD[pin].stato = 'in_corso'; CLOUD_STUD[pin].consegnata = false; }
       CLOUD_CONS[pin] = {};
     } else {
@@ -1233,7 +1234,7 @@
       pin: STATE.studente.pin,
       classe: (CLASSE && CLASSE.classe) || '',
       fattura_id: STATE.assegnataId || '',
-      modalita: 'allenamento',
+      modalita: (STATE.modalitaCompiti ? 'compiti' : 'allenamento'),
       completato: true,
       risposte: {
         titolo: STATE.titoloCorrente || '',
@@ -1396,6 +1397,24 @@
       }, function(){ cb && cb(out); });
     }catch(e){ cb && cb(out); }
   }
+  // Decide la MODALITÀ dell'alunno all'accesso. Ritorna 'compiti' SOLO se: nessuna assegnazione (né sua né di
+  // classe) E il docente NON è presente (battito vecchio > 60s). Altrimenti null = flusso normale
+  // (assegnato → fa la verifica; nessuna assegnazione ma docente presente → schermata "In attesa").
+  function cloudModalitaAlunno(pin, cb){
+    if(!SB){ cb && cb(null); return; }
+    try{
+      SB.from('fatt_studenti').select('fattura_assegnata').eq('pin', pin).maybeSingle().then(function(r1){
+        var per = (r1 && r1.data) ? r1.data : null;
+        if(per && per.fattura_assegnata){ cb && cb(null); return; } // ha un'assegnazione personale → normale
+        SB.from('fatt_config').select('assegnata_id,docente_heartbeat').eq('id', 1).maybeSingle().then(function(r2){
+          var cfg = (r2 && r2.data) ? r2.data : null;
+          if(cfg && cfg.assegnata_id){ cb && cb(null); return; } // assegnazione di classe → normale
+          var hb = (cfg && cfg.docente_heartbeat) ? (Date.now() - new Date(cfg.docente_heartbeat).getTime()) : Infinity;
+          cb && cb((hb < 60000) ? null : 'compiti'); // docente presente → normale ("In attesa"); assente → compiti
+        }, function(){ cb && cb(null); });
+      }, function(){ cb && cb(null); });
+    }catch(e){ cb && cb(null); }
+  }
   function refreshStati(){
     if(!(typeof CLASSE!=='undefined' && CLASSE && CLASSE.alunni)) return;
     var nColl=0,nCorso=0,nDone=0;
@@ -1427,8 +1446,16 @@
     var t1=byId('tile-collegati'),t2=byId('tile-incorso'),t3=byId('tile-consegnati');
     if(t1)t1.textContent=nColl; if(t2)t2.textContent=nCorso; if(t3)t3.textContent=nDone;
   }
+  // "Battito" di presenza del docente: scritto SOLO se ha una classe caricata. Serve all'alunno per capire
+  // se è in classe (docente presente → "In attesa") o a casa (docente assente → sceglie i compiti da solo).
+  function cloudDocenteHeartbeat(){
+    if(!SB) return;
+    if(!(typeof CLASSE!=='undefined' && CLASSE && CLASSE.alunni && CLASSE.alunni.length)) return;
+    try{ SB.from('fatt_config').update({ docente_heartbeat:new Date().toISOString() }).eq('id', 1).then(function(){}, function(){}); }catch(e){}
+  }
   function startCollegatiTimer(){
     stopCollegatiTimer();
+    cloudDocenteHeartbeat();
     var doRender = function(){ refreshCloudStud(function(){ refreshConsegne(function(){ if(typeof renderDocente==='function') renderDocente(); }); }); };
     // sincronizza l'assegnazione di classe dal cloud (la dashboard riflette ciò che hanno davvero gli alunni)
     if(SB){
@@ -1441,7 +1468,7 @@
       }catch(e){ doRender(); }
     } else { doRender(); }
     // il refresh periodico aggiorna SOLO stato e conteggi: non ricostruisce le tendine
-    STATE.collegatiTimer = setInterval(function(){ refreshCloudStud(function(){ refreshConsegne(refreshStati); }); }, 4000);
+    STATE.collegatiTimer = setInterval(function(){ cloudDocenteHeartbeat(); refreshCloudStud(function(){ refreshConsegne(refreshStati); }); }, 4000);
   }
   function cloudLoginPin(pin, cb){
     if(!SB){ cb && cb(null); return; }
@@ -2359,7 +2386,7 @@
     window.scrollTo(0, 0);
   }
   function goGate(){
-    stopAttesaWatcher(); stopPresenza(); stopCollegatiTimer(); stopBloccoWatcher(); stopConsegnaWatcher(); stopAssegnazioneWatcher(); STATE.riammesso = false; if(STATE.studente){ cloudClearPresenza(STATE.studente.pin); STATE.studente = null; }
+    stopAttesaWatcher(); stopPresenza(); stopCollegatiTimer(); stopBloccoWatcher(); stopConsegnaWatcher(); stopAssegnazioneWatcher(); STATE.riammesso = false; STATE.modalitaCompiti = false; STATE.solExitFn = null; if(STATE.studente){ cloudClearPresenza(STATE.studente.pin); STATE.studente = null; }
     try{ sessionStorage.removeItem('ff_studente_attivo'); sessionStorage.removeItem('ff_docente_attivo'); }catch(e){}
     byId('gate-doc').style.display = 'none'; byId('gate-pin').style.display = '';
     byId('in-pin').value = ''; byId('in-pass').value = '';
@@ -2613,10 +2640,13 @@
   }
   // Dopo aver visto la correzione: se l'alunno ha più fatture torna al menù, altrimenti esce.
   function tornaDaConsegna(){
-    if(STATE.multiMode && STATE.studente){ mostraMenuFatture(); }
+    if(STATE.modalitaCompiti && STATE.studente){ renderCompitiPicker(); show('menu-fatture'); }
+    else if(STATE.multiMode && STATE.studente){ mostraMenuFatture(); }
     else { goGate(); }
   }
-  function esciLabel(){ return (STATE.multiMode && STATE.studente) ? '← Le mie fatture' : 'Esci'; }
+  function esciLabel(){ if(STATE.modalitaCompiti && STATE.studente) return '← Torna ai compiti'; if(STATE.solExitFn) return '← Indietro'; return (STATE.multiMode && STATE.studente) ? '← Le mie fatture' : 'Esci'; }
+  // Uscita dalle viste soluzione: se è impostata una destinazione (compiti a casa / archivio docente) usa quella.
+  function solEsci(){ if(STATE.solExitFn){ var fn = STATE.solExitFn; fn(); return; } tornaDaConsegna(); }
 
   function entraAlunnoView(){
     var f = FATTURE.find(function(x){ return x.id === STATE.assegnataId; });
@@ -2629,7 +2659,7 @@
       return;
     }
     stopAttesaWatcher();
-    if(STATE.studente){ segnaIniziata(STATE.studente.pin, STATE.assegnataId); } // ha aperto questa fattura: se il docente la toglie, si chiede conferma
+    if(!STATE.modalitaCompiti && STATE.studente){ segnaIniziata(STATE.studente.pin, STATE.assegnataId); } // ha aperto questa fattura: se il docente la toglie, si chiede conferma
     STATE.verificaCorrente = f.testo; STATE.soluzioneCorrente = f.soluzione; STATE.consegnata = false;
     STATE.titoloCorrente = f.titolo;
     buildRubrica();
@@ -2662,7 +2692,11 @@
     top.appendChild(span);
     // Alunno con più fatture: link per tornare al menù SENZA consegnare, per provare/finire le altre.
     // Il lavoro di questa fattura resta salvato (chiave ff_lavoro per fattura) e si ritrova riaprendola.
-    if(STATE.multiMode && STATE.studente){
+    if(STATE.modalitaCompiti && STATE.studente){
+      var toC = document.createElement('span'); toC.className = 'link link-menu'; toC.textContent = '← Torna ai compiti'; toC.style.marginRight = '14px';
+      toC.addEventListener('click', function(){ salvaLavoro(); renderCompitiPicker(); show('menu-fatture'); });
+      top.appendChild(toC);
+    } else if(STATE.multiMode && STATE.studente){
       var toMenu = document.createElement('span'); toMenu.className = 'link link-menu'; toMenu.textContent = '← Le mie fatture'; toMenu.style.marginRight = '14px';
       toMenu.addEventListener('click', function(){ salvaLavoro(); mostraMenuFatture(); });
       top.appendChild(toMenu);
@@ -2670,7 +2704,7 @@
     top.appendChild(out);
     byId('cortesia-banner').innerHTML = 'Questa è la <b>tua</b> copia di cortesia, con i valori che hai inserito. Controlla bene prima di consegnare.';
     byId('btnChiudi').style.display = ''; byId('btnIndietro').style.display = '';
-    cloudPresenza();
+    if(!STATE.modalitaCompiti) cloudPresenza();
     show('editor');
   }
 
@@ -2885,7 +2919,7 @@
     a.appendChild(solBtn('La mia copia', 'btn-ghost', viewCortesiaAlunno));
     a.appendChild(solBtn('Vedi nel compilatore', 'btn-ghost', viewDashboardCorretta));
     a.appendChild(solBtn('Scarica in PDF', 'btn-green', function(){ stampa('soluzione-view'); }));
-    var esci = solBtn(esciLabel(), 'btn-ghost', tornaDaConsegna); esci.style.marginLeft = 'auto'; a.appendChild(esci);
+    var esci = solBtn(esciLabel(), 'btn-ghost', solEsci); esci.style.marginLeft = 'auto'; a.appendChild(esci);
     byId('soluzione-page').innerHTML = STATE.correctCortesiaHTML || '';
     show('soluzione-view');
   }
@@ -2896,7 +2930,7 @@
     b.innerHTML = 'La tua copia (con eventuali errori)';
     var a = byId('sol-view-actions'); a.innerHTML = '';
     a.appendChild(solBtn('Copia di cortesia corretta', 'btn-green', viewCortesiaCorretta));
-    var esci = solBtn(esciLabel(), 'btn-ghost', tornaDaConsegna); esci.style.marginLeft = 'auto'; a.appendChild(esci);
+    var esci = solBtn(esciLabel(), 'btn-ghost', solEsci); esci.style.marginLeft = 'auto'; a.appendChild(esci);
     byId('soluzione-page').innerHTML = STATE.myCortesiaHTML || '';
     show('soluzione-view');
   }
@@ -2907,7 +2941,7 @@
     setSolBanner('Dashboard — soluzione corretta', [
       { label:'La mia dashboard', fn:viewDashboardAlunno },
       { label:'Vedi cortesia corretta', fn:viewCortesiaCorretta },
-      { label:esciLabel(), fn:tornaDaConsegna }
+      { label:esciLabel(), fn:solEsci }
     ], false);
   }
 
@@ -2919,7 +2953,7 @@
     ed.classList.add('sol-mode');
     setSolBanner('La tua dashboard', [
       { label:'Dashboard corretta', fn:viewDashboardCorretta },
-      { label:esciLabel(), fn:tornaDaConsegna }
+      { label:esciLabel(), fn:solEsci }
     ], true);
     show('editor');
   }
@@ -2936,6 +2970,14 @@
     byId('err-alunno').textContent = '';
     if(!CLASSE) CLASSE = { classe:(al.classe||''), alunni:[al] };
     STATE.studente = al;
+    // Smistamento: se non c'è assegnazione e il docente non è presente → COMPITI A CASA (nessun blocco PIN).
+    // Altrimenti flusso normale (verifica/esercitazione in classe, con anti-doppio-accesso).
+    cloudModalitaAlunno(al.pin, function(mode){
+      if(mode === 'compiti'){ avviaCompitiACasa(); return; }
+      entraStudenteNormale(al);
+    });
+  }
+  function entraStudenteNormale(al){
     cloudCheckAccesso(al.pin, function(acc){
       if(acc && acc.allow === false){
         var bn = byId('blocco-nome'); if(bn) bn.textContent = al.cognome + ' ' + al.nome;
@@ -2949,6 +2991,211 @@
         return;
       }
       cloudLeggiContestoAlunno(al.pin, avviaAlunnoConLista);
+    });
+  }
+  // Ripristino dopo F5: ridecide la modalità (compiti vs verifica) e rientra dove serve.
+  function ripristinaAlunno(pin){
+    cloudModalitaAlunno(pin, function(mode){
+      if(mode === 'compiti'){ avviaCompitiACasa(); return; }
+      cloudLeggiContestoAlunno(pin, avviaAlunnoConLista);
+    });
+  }
+  /* ===================== COMPITI A CASA (modalità libera, senza blocco PIN) ===================== */
+  // Verità cross-device dal cloud: quali fatture ha già consegnato come compiti, e la singola consegna (con gli HTML).
+  function cloudCompitiDone(pin, cb){
+    if(!SB){ cb && cb([]); return; }
+    try{
+      SB.from('fatt_tentativi').select('fattura_id').eq('pin', pin).eq('modalita', 'compiti').eq('completato', true).then(function(res){
+        var ids = {}; ((res && res.data) || []).forEach(function(t){ if(t.fattura_id) ids[t.fattura_id] = true; });
+        cb && cb(Object.keys(ids));
+      }, function(){ cb && cb([]); });
+    }catch(e){ cb && cb([]); }
+  }
+  function cloudCompitiUno(pin, fatturaId, cb){
+    if(!SB){ cb && cb(null); return; }
+    try{
+      SB.from('fatt_tentativi').select('risposte,created_at').eq('pin', pin).eq('modalita', 'compiti').eq('fattura_id', fatturaId).order('created_at', {ascending:false}).limit(1).then(function(res){
+        var row = (res && res.data && res.data[0]) ? res.data[0] : null;
+        cb && cb(row ? (row.risposte || null) : null);
+      }, function(){ cb && cb(null); });
+    }catch(e){ cb && cb(null); }
+  }
+  // Ingresso in modalità compiti: carica l'archivio (se manca) e mostra la maschera di scelta.
+  function avviaCompitiACasa(){
+    STATE.modalitaCompiti = true;
+    STATE.multiMode = false;
+    STATE.solExitFn = null;
+    var go = function(){
+      var pin = STATE.studente ? STATE.studente.pin : '';
+      cloudCompitiDone(pin, function(done){
+        STATE.compitiDone = done || [];
+        renderCompitiPicker();
+        show('menu-fatture');
+      });
+    };
+    if((typeof FATTURE==='undefined' || !FATTURE || !FATTURE.length) && SB){ cloudCaricaContesto(function(){ go(); }); }
+    else go();
+  }
+  // Maschera: TUTTE le fatture dell'archivio. Fatte → "✓ Consegnato" + "Vedi soluzione"; da fare → "Compila".
+  function renderCompitiPicker(){
+    STATE.modalitaCompiti = true; STATE.menuBackFn = null; STATE.archivioMode = false;
+    var eb = byId('btn-esci-menu'); if(eb) eb.textContent = 'Esci';
+    var nome = STATE.studente ? STATE.studente.nome : '';
+    byId('menu-title').textContent = 'Compiti a casa' + (nome ? (' — ' + nome) : '');
+    var done = STATE.compitiDone || [];
+    var list = byId('menu-list'); list.innerHTML = '';
+    var tot = 0, fatti = 0;
+    (FATTURE || []).slice().sort(function(a, b){ return (parseInt(numeroFattura(a.id), 10) || 0) - (parseInt(numeroFattura(b.id), 10) || 0); }).forEach(function(f){
+      tot++;
+      var fatta = done.indexOf(f.id) !== -1; if(fatta) fatti++;
+      var row = document.createElement('div'); row.className = 'menu-row' + (fatta ? ' fatta' : '');
+      var num = document.createElement('div'); num.className = 'menu-num'; num.textContent = numeroFattura(f.id);
+      var info = document.createElement('div'); info.className = 'menu-info';
+      var t = document.createElement('div'); t.className = 't'; t.textContent = f.titolo || ('Esercizio ' + numeroFattura(f.id));
+      var s = document.createElement('div'); s.className = 's'; s.textContent = f.difficoltaNome ? ('Difficoltà ' + f.difficoltaNome) : 'Fattura da compilare';
+      info.appendChild(t); info.appendChild(s);
+      var cta = document.createElement('div'); cta.className = 'menu-cta';
+      if(fatta){
+        var d = document.createElement('span'); d.className = 'menu-done'; d.textContent = '✓ Consegnato'; cta.appendChild(d);
+        var vs = document.createElement('button'); vs.className = 'btn-ghost'; vs.textContent = 'Vedi soluzione'; vs.style.marginLeft = '8px';
+        vs.addEventListener('click', function(){ apriSoluzioneCompito(f); }); cta.appendChild(vs);
+      } else {
+        var b = document.createElement('button'); b.className = 'btn-compila'; b.textContent = 'Compila'; b.addEventListener('click', function(){ apriCompito(f); }); cta.appendChild(b);
+      }
+      row.appendChild(num); row.appendChild(info); row.appendChild(cta); list.appendChild(row);
+    });
+    byId('menu-sub').textContent = 'Scegli una fattura, compilala e consegnala al prof. Dopo la consegna vedrai (e potrai stampare) la soluzione. Ogni fattura si compila una volta sola. (Fatte ' + fatti + ' su ' + tot + ')';
+  }
+  function apriCompito(f){
+    STATE.assegnataId = f.id; STATE.consegnata = false; STATE.solExitFn = null;
+    LIVELLO = 2; try{ localStorage.setItem('ff_livello', '2'); }catch(e){}
+    entraAlunnoView();
+  }
+  // Consegna di un compito: cattura i 4 HTML, salva nel cloud (modalita='compiti'), poi mostra la soluzione.
+  function consegnaCompito(){
+    if(STATE.consegnata) return;
+    showConfirm('Vuoi consegnare questa fattura al prof? Dopo la consegna vedrai la soluzione e potrai stamparla, ma non potrai più modificarla.', function(){
+      STATE.consegnata = true;
+      catturaConsegnaCorrente(); // cattura myDashboard/myCortesia/correct* + salva nel cloud
+      if(STATE.compitiDone && STATE.compitiDone.indexOf(STATE.assegnataId) === -1) STATE.compitiDone.push(STATE.assegnataId);
+      mostraSoluzioneCompiti();
+    });
+  }
+  // Rivedere la soluzione di un compito GIÀ consegnato (dalla maschera).
+  function apriSoluzioneCompito(f){
+    var pin = STATE.studente ? STATE.studente.pin : '';
+    cloudCompitiUno(pin, f.id, function(r){
+      if(!r){ showAlert('Soluzione non trovata per questa fattura.'); return; }
+      STATE.assegnataId = f.id;
+      STATE.soluzioneCorrente = f.soluzione;
+      STATE.titoloCorrente = f.titolo;
+      STATE.myCortesiaHTML = r.cortesiaAlunno || '';
+      STATE.correctCortesiaHTML = r.cortesiaCorretta || '';
+      STATE.myDashboardHTML = r.dashboardAlunno || '';
+      STATE.correctDashboardHTML = r.dashboardCorretta || '';
+      mostraSoluzioneCompiti();
+    });
+  }
+  // Vista SOLUZIONE a confronto (riusa le 4 viste come le vede il docente), con uscita verso la maschera compiti.
+  function mostraSoluzioneCompiti(){
+    STATE.solExitFn = function(){ renderCompitiPicker(); show('menu-fatture'); };
+    viewDashboardCorretta();
+  }
+
+  /* ===================== ARCHIVIO COMPITI A CASA (lato docente) ===================== */
+  // Elenco nomi → fatture consegnate → soluzione a confronto. Riusa la schermata "menu-fatture" e le viste soluzione.
+  function apriArchivioCompiti(){
+    if(!SB){ showAlert('Cloud non disponibile.'); return; }
+    var carica = function(){
+      SB.from('fatt_tentativi').select('pin,fattura_id,risposte,created_at').eq('modalita', 'compiti').eq('completato', true).order('created_at', {ascending:true}).then(function(res){
+        var rows = (res && res.data) || [];
+        var byPin = {};
+        rows.forEach(function(r){
+          var rr = r.risposte || {};
+          if(!byPin[r.pin]) byPin[r.pin] = { pin:r.pin, nome:(rr.nome || r.pin), items:{} };
+          byPin[r.pin].items[r.fattura_id] = { fattura_id:r.fattura_id, titolo:(rr.titolo || r.fattura_id), risposte:rr }; // tiene l'ultima consegna per fattura
+        });
+        STATE.archivioCompiti = byPin;
+        renderArchivioNomi();
+      }, function(){ showAlert('Errore nella lettura dell\'archivio compiti.'); });
+    };
+    if(typeof FATTURE==='undefined' || !FATTURE || !FATTURE.length){ cloudCaricaContesto(function(){ carica(); }); }
+    else carica();
+  }
+  function renderArchivioNomi(){
+    STATE.archivioMode = true; STATE.modalitaCompiti = false; STATE.solExitFn = null;
+    STATE.menuBackFn = function(){ tornaDashboardDaArchivio(); };
+    var byPin = STATE.archivioCompiti || {};
+    var pins = Object.keys(byPin).sort(function(a, b){ return (byPin[a].nome || '').localeCompare(byPin[b].nome || '', 'it'); });
+    byId('menu-title').textContent = '📚 Archivio compiti a casa';
+    byId('menu-sub').textContent = pins.length
+      ? ('Alunni che hanno consegnato compiti: ' + pins.length + '. Clicca un nome per vedere le sue fatture e le soluzioni.')
+      : 'Ancora nessun compito consegnato.';
+    var list = byId('menu-list'); list.innerHTML = '';
+    pins.forEach(function(pin){
+      var s = byPin[pin];
+      var nfat = Object.keys(s.items).length;
+      var row = document.createElement('div'); row.className = 'menu-row';
+      var num = document.createElement('div'); num.className = 'menu-num'; num.textContent = '👤';
+      var info = document.createElement('div'); info.className = 'menu-info';
+      var t = document.createElement('div'); t.className = 't'; t.textContent = s.nome;
+      var sub = document.createElement('div'); sub.className = 's'; sub.textContent = nfat + (nfat === 1 ? ' fattura consegnata' : ' fatture consegnate');
+      info.appendChild(t); info.appendChild(sub);
+      var cta = document.createElement('div'); cta.className = 'menu-cta';
+      var b = document.createElement('button'); b.className = 'btn-compila'; b.textContent = 'Apri'; b.addEventListener('click', function(){ renderArchivioFatture(pin); }); cta.appendChild(b);
+      row.appendChild(num); row.appendChild(info); row.appendChild(cta); list.appendChild(row);
+    });
+    if(pins.length){
+      var svu = document.createElement('button'); svu.className = 'btn-ghost'; svu.textContent = '🗑 Svuota archivio compiti'; svu.style.cssText = 'margin-top:14px; color:#b4472f;';
+      svu.addEventListener('click', svuotaArchivioCompiti); list.appendChild(svu);
+    }
+    var esci = byId('btn-esci-menu'); if(esci) esci.textContent = '← Torna alla dashboard';
+    show('menu-fatture');
+  }
+  function renderArchivioFatture(pin){
+    STATE.menuBackFn = function(){ renderArchivioNomi(); };
+    var s = (STATE.archivioCompiti || {})[pin]; if(!s){ renderArchivioNomi(); return; }
+    byId('menu-title').textContent = s.nome;
+    byId('menu-sub').textContent = 'Fatture consegnate come compiti. Clicca per vedere la soluzione a confronto.';
+    var ids = Object.keys(s.items).sort(function(a, b){ return (parseInt(numeroFattura(a), 10) || 0) - (parseInt(numeroFattura(b), 10) || 0); });
+    var list = byId('menu-list'); list.innerHTML = '';
+    ids.forEach(function(id){
+      var it = s.items[id];
+      var row = document.createElement('div'); row.className = 'menu-row fatta';
+      var num = document.createElement('div'); num.className = 'menu-num'; num.textContent = numeroFattura(id);
+      var info = document.createElement('div'); info.className = 'menu-info';
+      var t = document.createElement('div'); t.className = 't'; t.textContent = it.titolo || ('Esercizio ' + numeroFattura(id));
+      info.appendChild(t);
+      var cta = document.createElement('div'); cta.className = 'menu-cta';
+      var b = document.createElement('button'); b.className = 'btn-compila'; b.textContent = 'Soluzione'; b.addEventListener('click', function(){ apriSoluzioneArchivio(pin, id); }); cta.appendChild(b);
+      row.appendChild(num); row.appendChild(info); row.appendChild(cta); list.appendChild(row);
+    });
+    var esci = byId('btn-esci-menu'); if(esci) esci.textContent = '← Torna ai nomi';
+    show('menu-fatture');
+  }
+  function apriSoluzioneArchivio(pin, fatturaId){
+    var s = (STATE.archivioCompiti || {})[pin]; if(!s || !s.items[fatturaId]) return;
+    var r = s.items[fatturaId].risposte || {};
+    var f = (FATTURE || []).find(function(x){ return x.id === fatturaId; });
+    STATE.assegnataId = fatturaId;
+    STATE.soluzioneCorrente = f ? f.soluzione : null;
+    STATE.titoloCorrente = s.items[fatturaId].titolo;
+    STATE.myCortesiaHTML = r.cortesiaAlunno || '';
+    STATE.correctCortesiaHTML = r.cortesiaCorretta || '';
+    STATE.myDashboardHTML = r.dashboardAlunno || '';
+    STATE.correctDashboardHTML = r.dashboardCorretta || '';
+    STATE.solExitFn = function(){ renderArchivioFatture(pin); };
+    viewDashboardCorretta();
+  }
+  function tornaDashboardDaArchivio(){
+    STATE.archivioMode = false; STATE.menuBackFn = null;
+    var esci = byId('btn-esci-menu'); if(esci) esci.textContent = 'Esci';
+    show('docente'); renderDocente();
+  }
+  function svuotaArchivioCompiti(){
+    if(!SB) return;
+    showConfirm('Vuoi svuotare TUTTO l\'archivio dei compiti a casa? I compiti consegnati dai ragazzi verranno cancellati definitivamente. (Non tocca le verifiche.)', function(){
+      try{ SB.from('fatt_tentativi').delete().eq('modalita', 'compiti').gte('created_at', '2000-01-01').then(function(){ STATE.archivioCompiti = {}; renderArchivioNomi(); showAlert('Archivio compiti svuotato.'); }, function(){ showAlert('Errore durante lo svuotamento.'); }); }catch(e){ showAlert('Errore: ' + e.message); }
     });
   }
   byId('btn-entra-alunno').addEventListener('click', function(){
@@ -2997,7 +3244,7 @@
   byId('btn-esci-doc').addEventListener('click', goGate);
   byId('btn-esci-attesa').addEventListener('click', goGate);
   byId('btn-esci-blocco').addEventListener('click', goGate);
-  byId('btn-esci-menu').addEventListener('click', goGate);
+  byId('btn-esci-menu').addEventListener('click', function(){ if(STATE.menuBackFn){ var fn = STATE.menuBackFn; fn(); return; } goGate(); });
   window.addEventListener('storage', function(e){
     if(!e || !e.key) return;
     if(e.key === 'ff_assegnata' || e.key === 'ff_archivio' || e.key === 'ff_classe'){
@@ -3020,6 +3267,7 @@
   byId('btn-carica-classe').addEventListener('click', function(){ byId('file-classe').click(); });
   byId('btn-carica-verifica').addEventListener('click', function(){ byId('file-verifica').click(); });
   byId('btn-esporta-html').addEventListener('click', esportaHTML);
+  byId('btn-archivio-compiti').addEventListener('click', apriArchivioCompiti);
   byId('btn-consegna-classe').addEventListener('click', forzaConsegnaClasse);
   byId('btn-backup').addEventListener('click', backupClasse);
   byId('btn-ripristina').addEventListener('click', function(){ byId('file-ripristina').click(); });
@@ -3049,6 +3297,7 @@
   byId('btnScaricaPdf').addEventListener('click', function(){ stampa('cortesia-view'); });
   byId('btnChiudi').addEventListener('click', function(){
     if(STATE.consegnata) return;
+    if(STATE.modalitaCompiti){ consegnaCompito(); return; } // compiti a casa: consegna + mostra soluzione
     var msgCons = STATE.multiMode
       ? 'Vuoi consegnare questa fattura? Una volta consegnata non potrai più modificarla né vedere le soluzioni.'
       : 'Vuoi consegnare l\'esercitazione? Una volta consegnata non potrai più modificarla né vedere le soluzioni.';
@@ -3110,11 +3359,11 @@
     } else if(attivo){
       var alu = (CLASSE && CLASSE.alunni) ? CLASSE.alunni.find(function(a){ return a.pin === attivo; }) : null;
       // Dopo un F5 rientra passando dal contesto (menù se più fatture, singola se una sola).
-      if(alu){ STATE.studente = alu; buildRubrica(); cloudLeggiContestoAlunno(alu.pin, avviaAlunnoConLista); }
+      if(alu){ STATE.studente = alu; buildRubrica(); ripristinaAlunno(alu.pin); }
       else {
         // Dispositivo dell'alunno senza classe caricata in locale: recupera l'alunno dal cloud e rientra dov'era.
         cloudLoginPin(attivo, function(stud){
-          if(stud){ STATE.studente = stud; if(!CLASSE) CLASSE = { classe:(stud.classe||''), alunni:[stud] }; cloudCaricaContesto(function(){ buildRubrica(); cloudLeggiContestoAlunno(attivo, avviaAlunnoConLista); }); }
+          if(stud){ STATE.studente = stud; if(!CLASSE) CLASSE = { classe:(stud.classe||''), alunni:[stud] }; cloudCaricaContesto(function(){ buildRubrica(); ripristinaAlunno(attivo); }); }
           else { goGate(); }
         });
       }
