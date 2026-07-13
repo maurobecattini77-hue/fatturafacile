@@ -201,6 +201,21 @@
   #sol-banner .sb-tag{ font-weight:700; letter-spacing:.02em; }
   #sol-banner .sb-btn{ margin-left:auto; background:#065f46; color:#fff; border:none; border-radius:8px; padding:9px 16px; font-size:13px; font-weight:600; cursor:pointer; flex:none; }
   #sol-banner .sb-btn:hover{ background:#054b38; }
+  /* ---- Visualizzatore compiti a schede (come l'export): Fattura / Fattura corretta / Dashboard / Dashboard corretta ---- */
+  .vc-bar{ width:100%; max-width:1360px; margin:0 auto; }
+  .vc-chips{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+  .vc-chip{ border:1px solid #cdd8e6; background:#f4f7fb; border-radius:9px; padding:6px 14px; cursor:pointer; font-size:13px; color:#3a475c; font-family:inherit; }
+  .vc-chip:hover{ background:#e9f0fa; }
+  .vc-chip.active{ background:#5c8b73; color:#fff; border-color:#5c8b73; }
+  .vc-row{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .vc-tabs{ display:flex; gap:8px; flex-wrap:wrap; }
+  .vc-tab{ border:1px solid #cfd8e6; background:#fff; border-radius:10px; padding:8px 15px; cursor:pointer; font-size:14px; color:#3a475c; font-family:inherit; }
+  .vc-tab:hover{ background:#f4f7fb; }
+  .vc-tab.active{ background:#254a86; color:#fff; border-color:#254a86; }
+  .vc-spacer{ margin-left:auto; display:flex; gap:10px; }
+  .vc-pdf{ border:1px solid #6ee7b7; background:#ecfdf5; color:#065f46; border-radius:10px; padding:8px 15px; cursor:pointer; font-size:14px; font-family:inherit; }
+  .vc-esci{ border:1px solid #cfd8e6; background:#fff; border-radius:10px; padding:8px 15px; cursor:pointer; font-size:14px; color:#254a86; font-family:inherit; }
+  .vc-esci:hover{ background:#f4f7fb; }
   #editor.sol-mode #toolbar,
   #editor.sol-mode #btnFinalizza,
   #editor.sol-mode .trash,
@@ -3085,6 +3100,66 @@
     show('editor');
   }
 
+  /* ---------- VISUALIZZATORE COMPITI A SCHEDE (come l'export) ----------
+     Stessa vista per il DOCENTE (archivio) e per l'ALUNNO (dopo la consegna):
+     schede Fattura / Fattura corretta / Dashboard / Dashboard corretta, con
+     l'eventuale selettore delle fatture. Piloto i contenitori già esistenti
+     (#soluzione-page per le cortesie, #editor.sol-mode per le dashboard). */
+  var VC = { fatture:[], cf:0, ct:0, mode:'alunno', cognome:'', exitFn:null };
+  function vcLabel(i){
+    if(VC.mode === 'docente'){ var c = VC.cognome ? (' ' + VC.cognome) : ''; return ['Fattura' + c, 'Fattura corretta', 'Dashboard' + c, 'Dashboard corretta'][i]; }
+    return ['La mia fattura', 'Fattura corretta', 'La mia dashboard', 'Dashboard corretta'][i];
+  }
+  function mostraViewerCompiti(rec, mode, exitFn){
+    VC.fatture = (rec && rec.fatture) || [];
+    VC.cf = (rec && rec.cf) ? rec.cf : 0;
+    VC.ct = 0; VC.mode = mode || 'alunno'; VC.cognome = (rec && rec.cognome) || ''; VC.exitFn = exitFn || null;
+    if(!VC.fatture.length){ showAlert('Nessuna fattura da mostrare.'); if(VC.exitFn) VC.exitFn(); return; }
+    if(VC.cf >= VC.fatture.length) VC.cf = 0;
+    vcGo();
+  }
+  function vcBarNode(){
+    var bar = document.createElement('div'); bar.className = 'vc-bar';
+    if(VC.fatture.length > 1){
+      var chips = document.createElement('div'); chips.className = 'vc-chips';
+      VC.fatture.forEach(function(f, i){
+        var b = document.createElement('button'); b.type = 'button'; b.className = 'vc-chip' + (i === VC.cf ? ' active' : '');
+        b.textContent = 'Fattura ' + f.num; b.addEventListener('click', function(){ VC.cf = i; vcGo(); }); chips.appendChild(b);
+      });
+      bar.appendChild(chips);
+    }
+    var row = document.createElement('div'); row.className = 'vc-row';
+    var tabs = document.createElement('div'); tabs.className = 'vc-tabs';
+    for(var i = 0; i < 4; i++){ (function(i){
+      var b = document.createElement('button'); b.type = 'button'; b.className = 'vc-tab' + (i === VC.ct ? ' active' : '');
+      b.textContent = vcLabel(i); b.addEventListener('click', function(){ VC.ct = i; vcGo(); }); tabs.appendChild(b);
+    })(i); }
+    row.appendChild(tabs);
+    var sp = document.createElement('div'); sp.className = 'vc-spacer';
+    if(VC.ct <= 1){ var pdf = document.createElement('button'); pdf.type = 'button'; pdf.className = 'vc-pdf'; pdf.textContent = 'Scarica PDF'; pdf.addEventListener('click', function(){ stampa('soluzione-view'); }); sp.appendChild(pdf); }
+    var esci = document.createElement('button'); esci.type = 'button'; esci.className = 'vc-esci';
+    esci.textContent = (VC.mode === 'docente') ? '← Torna ai nomi' : '← Torna ai compiti';
+    esci.addEventListener('click', function(){ if(VC.exitFn) VC.exitFn(); });
+    sp.appendChild(esci); row.appendChild(sp); bar.appendChild(row);
+    return bar;
+  }
+  function vcGo(){
+    var f = VC.fatture[VC.cf] || {};
+    if(VC.ct <= 1){
+      var page = byId('soluzione-page'); page.innerHTML = (VC.ct === 0 ? (f.cortesiaAlunno || '<i>—</i>') : (f.cortesiaCorretta || '<i>—</i>'));
+      var act = byId('sol-view-actions'); if(act){ act.innerHTML = ''; act.style.display = 'none'; }
+      var ban = byId('sol-view-banner'); ban.className = ''; ban.style.cssText = 'margin-bottom:16px;'; ban.innerHTML = ''; ban.appendChild(vcBarNode());
+      show('soluzione-view');
+    } else {
+      var ed = byId('editor'); ed.innerHTML = (VC.ct === 2 ? (f.dashboardAlunno || '') : (f.dashboardCorretta || '')); ed.classList.add('sol-mode');
+      var sb = byId('sol-banner');
+      if(sb){ sb.style.cssText = 'display:block; max-width:1360px; margin:0 auto 16px; padding:0; background:transparent; border:none; color:inherit; font-weight:400;'; sb.innerHTML = ''; sb.appendChild(vcBarNode()); }
+      show('editor');
+      var vb = byId('verifica-bar'); if(vb) vb.style.display = 'none';
+    }
+    window.scrollTo(0, 0);
+  }
+
   /* =========================================================
      WIRING
      ========================================================= */
@@ -3226,8 +3301,14 @@
   }
   // Vista SOLUZIONE a confronto (riusa le 4 viste come le vede il docente), con uscita verso la maschera compiti.
   function mostraSoluzioneCompiti(){
-    STATE.solExitFn = function(){ renderCompitiPicker(); show('menu-fatture'); };
-    viewDashboardCorretta();
+    var rec = { cognome:'', fatture:[{
+      num: numeroFattura(STATE.assegnataId),
+      cortesiaAlunno: STATE.myCortesiaHTML || '',
+      cortesiaCorretta: STATE.correctCortesiaHTML || '',
+      dashboardAlunno: STATE.myDashboardHTML || '',
+      dashboardCorretta: STATE.correctDashboardHTML || ''
+    }] };
+    mostraViewerCompiti(rec, 'alunno', function(){ renderCompitiPicker(); show('menu-fatture'); });
   }
 
   /* ===================== ARCHIVIO COMPITI A CASA (lato docente) ===================== */
@@ -3352,18 +3433,22 @@
   function apriSoluzioneArchivio(pin, fatturaId){
     var cl = STATE.archivioClasseSel;
     var byPin = ((STATE.archivioClassi || {})[cl] || { byPin:{} }).byPin;
-    var s = byPin[pin]; if(!s || !s.items[fatturaId]) return;
-    var r = s.items[fatturaId].risposte || {};
-    var f = (FATTURE || []).find(function(x){ return x.id === fatturaId; });
-    STATE.assegnataId = fatturaId;
-    STATE.soluzioneCorrente = f ? f.soluzione : null;
-    STATE.titoloCorrente = s.items[fatturaId].titolo;
-    STATE.myCortesiaHTML = r.cortesiaAlunno || '';
-    STATE.correctCortesiaHTML = r.cortesiaCorretta || '';
-    STATE.myDashboardHTML = r.dashboardAlunno || '';
-    STATE.correctDashboardHTML = r.dashboardCorretta || '';
-    STATE.solExitFn = function(){ renderArchivioFatture(pin); };
-    viewDashboardCorretta();
+    var s = byPin[pin]; if(!s) return;
+    var ids = Object.keys(s.items).sort(function(a, b){ return (parseInt(numeroFattura(a), 10) || 0) - (parseInt(numeroFattura(b), 10) || 0); });
+    var cognome = '';
+    var fatture = ids.map(function(id){
+      var rr = s.items[id].risposte || {};
+      if(!cognome) cognome = rr.cognome || ((s.nome || '').split(' ')[0]) || '';
+      return {
+        num: numeroFattura(id),
+        cortesiaAlunno: rr.cortesiaAlunno || '',
+        cortesiaCorretta: rr.cortesiaCorretta || '',
+        dashboardAlunno: rr.dashboardAlunno || '',
+        dashboardCorretta: rr.dashboardCorretta || ''
+      };
+    });
+    var cf = ids.indexOf(fatturaId); if(cf < 0) cf = 0;
+    mostraViewerCompiti({ cognome:cognome, cf:cf, fatture:fatture }, 'docente', function(){ renderArchivioFatture(pin); });
   }
   function tornaDashboardDaArchivio(){
     STATE.archivioMode = false; STATE.menuBackFn = null;
