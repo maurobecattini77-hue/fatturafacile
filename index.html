@@ -986,18 +986,17 @@
     });
   }
   // Marca/smarca una CLASSE come "modalità compiti a casa" (lista in fatt_config.compiti_classi).
-  // on=true (dopo Reset classe): i suoi alunni fanno i compiti anche se il docente è collegato.
-  // on=false (dopo un'assegnazione): la classe torna in verifica.
+  // Una classe in compiti: (a) i suoi alunni fanno i compiti anche col docente collegato; (b) è NASCOSTA
+  // dalla dashboard/tendina del docente (i suoi alunni sono "a casa"). Si riporta in dashboard con "Carica classe".
+  // Uso STATE.compitiClassi come copia locale (effetto immediato) e scrivo nel cloud.
   function cloudSetModalitaCompiti(classe, on){
-    if(!SB || !classe) return;
-    try{
-      SB.from('fatt_config').select('compiti_classi').eq('id', 1).maybeSingle().then(function(res){
-        var arr = (res && res.data && Array.isArray(res.data.compiti_classi)) ? res.data.compiti_classi : [];
-        var set = {}; arr.forEach(function(c){ if(c) set[c] = true; });
-        if(on) set[classe] = true; else delete set[classe];
-        try{ SB.from('fatt_config').update({ compiti_classi: Object.keys(set) }).eq('id', 1).then(function(){}, function(){}); }catch(e){}
-      }, function(){});
-    }catch(e){}
+    if(!classe) return;
+    var arr = (STATE.compitiClassi || []).slice();
+    var i = arr.indexOf(classe);
+    if(on && i === -1) arr.push(classe);
+    if(!on && i !== -1) arr.splice(i, 1);
+    STATE.compitiClassi = arr;
+    if(SB){ try{ SB.from('fatt_config').update({ compiti_classi: arr }).eq('id', 1).then(function(){}, function(){}); }catch(e){} }
   }
   // Blocco anti-doppio-accesso: controlla se l'alunno può entrare e aggiorna lo stato.
   function cloudCheckAccesso(pin, cb){
@@ -1525,8 +1524,9 @@
     // sincronizza l'assegnazione di classe dal cloud (la dashboard riflette ciò che hanno davvero gli alunni)
     if(SB){
       try{
-        SB.from('fatt_config').select('assegnata_id,livello').eq('id', 1).maybeSingle().then(function(res){
+        SB.from('fatt_config').select('assegnata_id,livello,compiti_classi').eq('id', 1).maybeSingle().then(function(res){
           var cfg = (res && res.data) ? res.data : null;
+          STATE.compitiClassi = (cfg && Array.isArray(cfg.compiti_classi)) ? cfg.compiti_classi : (STATE.compitiClassi || []);
           if(cfg){ STATE.assegnate = parseAssegnazione(cfg.assegnata_id); STATE.assegnataId = assegnPrimoId(cfg.assegnata_id); var l0 = assegnPrimoLiv(cfg.assegnata_id) || cfg.livello; if(l0){ try{ localStorage.setItem('ff_livello', l0); }catch(e){} } }
           doRender();
         }, doRender);
@@ -2539,9 +2539,11 @@
   var CLASSES = [];
   function buildClassiDaCloud(){
     var m = {};
+    var nascoste = STATE.compitiClassi || []; // le classi "in compiti" sono NASCOSTE dalla dashboard (alunni a casa)
     Object.keys(CLOUD_STUD || {}).forEach(function(pin){
       var s = CLOUD_STUD[pin]; var c = (s && s.classe) ? s.classe : '';
       if(!c) return;
+      if(nascoste.indexOf(c) !== -1) return; // classe in modalità compiti → non compare nella tendina
       if(!m[c]) m[c] = { classe:c, alunni:[] };
       m[c].alunni.push({ pin:s.pin, nome:s.nome||'', cognome:s.cognome||'' });
     });
@@ -2574,6 +2576,10 @@
         var chosen = CLASSES.find(function(x){ return x.classe === pref; }) || CLASSES[0];
         CLASSE = chosen; STATE.classeAttiva = chosen.classe;
       }
+    } else {
+      // Nessuna classe attiva (tutte in compiti o nessuna caricata): dashboard pulita.
+      CLASSE = null; STATE.classeAttiva = null;
+      try{ localStorage.removeItem('ff_classe'); }catch(e){}
     }
     renderSelClasse();
     // Assegnazione corrente della classe attiva (dai suoi alunni): serve a pre-selezionare "Scegli fatture".
@@ -3423,7 +3429,7 @@
   byId('btn-reset').addEventListener('click', function(){
     var cl = (CLASSE && CLASSE.classe) || STATE.classeAttiva || '';
     if(!cl){ showAlert('Nessuna classe selezionata da azzerare. Carica o scegli una classe.'); return; }
-    showConfirm('Vuoi azzerare la classe ' + cl + '? Verranno rimosse l\'assegnazione e lo stato dei suoi alunni (comprese le verifiche consegnate). Restano il roster e i compiti a casa. Le ALTRE classi non vengono toccate.', function(){
+    showConfirm('Resettare la classe ' + cl + '? Uscirà dalla dashboard e passerà ai COMPITI A CASA (i suoi alunni, col PIN, faranno i compiti). Vengono azzerate assegnazione e verifiche consegnate della classe; i compiti già consegnati restano. Le altre classi non si toccano. Per rifarci una verifica la ricarichi con «Carica classe».', function(){
       cloudResetClasse(cl);
       cloudSetModalitaCompiti(cl, true); // dopo il Reset la classe passa in modalità compiti a casa
       STATE.assegnate = []; STATE.assegnataId = null;
@@ -3436,7 +3442,7 @@
         });
       }catch(e){}
       renderDocente();
-      showAlert('Classe ' + cl + ' azzerata. Ora, quando NON sei collegato, i suoi alunni entrando col PIN vanno ai compiti a casa.');
+      showAlert('Classe ' + cl + ' resettata: è uscita dalla dashboard e passa ai COMPITI A CASA (i suoi alunni, entrando col PIN, fanno i compiti). Per rifarci una verifica, ricaricala con «Carica classe».');
     });
   });
   byId('btn-carica-classe').addEventListener('click', function(){ byId('file-classe').click(); });
@@ -3450,6 +3456,7 @@
   byId('file-classe').addEventListener('change', function(){ leggiFile(this, function(j){
     if(!j || !Array.isArray(j.alunni)){ showAlert('Formato classe non riconosciuto: manca l\'elenco "alunni".'); return; }
     cloudUpsertClasse(j);
+    cloudSetModalitaCompiti(j.classe || '', false); // ricaricare una classe la riporta in dashboard (esce da modalità compiti)
     // Seed immediato di CLOUD_STUD (l'upsert è asincrono): la nuova classe compare subito nella tendina, senza sostituire le altre.
     j.alunni.forEach(function(a){ if(!a.pin) return; if(!CLOUD_STUD[a.pin]) CLOUD_STUD[a.pin] = { pin:a.pin, stato:'non_iniziato' }; CLOUD_STUD[a.pin].nome = a.nome; CLOUD_STUD[a.pin].cognome = a.cognome; CLOUD_STUD[a.pin].classe = j.classe || ''; });
     STATE.classeAttiva = j.classe || '';
