@@ -237,6 +237,7 @@
   .vv-sl{ color:#8a94a6; font-size:18px; }
   .vv-slabel{ font-size:11px; color:#8a94a6; margin-top:5px; }
   .vv-in{ font-family:inherit; font-size:16px; border:1px solid #cfd8e6; border-radius:8px; padding:7px 8px; width:56px; text-align:center; color:#2b3346; }
+  .vv-in.vv-err{ border-color:#e24b4a; background:#fdecec; color:#b4472f; }
   .vv-ta{ font-family:inherit; font-size:14px; line-height:1.5; border:1px solid #cfd8e6; border-radius:8px; padding:10px 12px; flex:1; resize:vertical; color:#2b3346; min-height:96px; box-sizing:border-box; }
   @media(max-width:640px){ .vv-row{ flex-direction:column; } .vv-left{ flex:auto; } }
   #editor.sol-mode #toolbar,
@@ -3230,19 +3231,32 @@
       + '<div class="vv-col"><div class="vv-lab">Voto finale</div><div class="vv-val vv-voto">' + esc(String(voto)) + '</div></div>';
   }
   function vvCollect(){
-    var host = byId('valuta-body'); var items = [], totP = 0, totM = 0, anyM = false;
+    var host = byId('valuta-body'); var items = [], totP = 0, totM = 0, anyM = false, hasError = false;
     VC.fatture.forEach(function(f, i){
       var pEl = host.querySelector('.vv-preso[data-i="' + i + '"]');
       var mEl = host.querySelector('.vv-max[data-i="' + i + '"]');
       var gEl = host.querySelector('.vv-giud[data-i="' + i + '"]');
       var p = pEl ? vvParse(pEl.value) : NaN, m = mEl ? vvParse(mEl.value) : NaN;
+      if(!isNaN(p) && !isNaN(m) && p > m) hasError = true;   // il voto preso non può superare il massimo
       if(!isNaN(p)) totP += p; if(!isNaN(m)){ totM += m; anyM = true; }
       items.push({ fattura_id:f.id, num:f.num, voto:(pEl && pEl.value.trim() !== '' ? p : null), max:(mEl && mEl.value.trim() !== '' ? m : null), giudizio:(gEl ? gEl.value : '') });
     });
     var perc = anyM && totM > 0 ? (totP / totM * 100) : null;
-    return { items:items, totale:totP, max_tot:(anyM ? totM : 0), perc:perc, voto_finale:(perc != null ? votoDaPerc(perc) : null) };
+    if(perc != null && perc > 100) perc = 100;   // la percentuale non supera mai il 100%
+    return { items:items, totale:totP, max_tot:(anyM ? totM : 0), perc:perc, voto_finale:(perc != null ? votoDaPerc(perc) : null), hasError:hasError };
   }
-  function vvRecalc(){ var v = vvCollect(); v.pubblicata = (VC.val && VC.val.pubblicata) || false; v.data = (VC.val && VC.val.data) || null; VC.val = v; var s = byId('vv-sum'); if(s) s.innerHTML = vvSummaryHtml(v); }
+  function vvRecalc(){
+    var v = vvCollect(); var host = byId('valuta-body');
+    v.items.forEach(function(it, i){
+      var pEl = host.querySelector('.vv-preso[data-i="' + i + '"]');
+      var errEl = host.querySelector('.vv-rowerr[data-i="' + i + '"]');
+      var bad = (it.voto != null && it.max != null && it.voto > it.max);
+      if(pEl) pEl.classList.toggle('vv-err', !!bad);
+      if(errEl) errEl.style.display = bad ? '' : 'none';
+    });
+    v.pubblicata = (VC.val && VC.val.pubblicata) || false; v.data = (VC.val && VC.val.data) || null; VC.val = v;
+    var s = byId('vv-sum'); if(s) s.innerHTML = vvSummaryHtml(v);
+  }
   function vcRenderValutazione(){
     var host = byId('valuta-body'); if(!host) return;
     var val = VC.val || {}; var saved = {};
@@ -3254,8 +3268,8 @@
       var giud = s.giudizio || '';
       return '<div class="vv-row">'
         + '<div class="vv-left"><div class="vv-fh">Fattura ' + esc(f.num) + (f.nonSvolta ? ' · non svolta' : '') + '</div>'
-        + '<div class="vv-score"><input class="vv-in vv-preso" data-i="' + i + '" value="' + esc(preso) + '" inputmode="decimal" placeholder="—"><span class="vv-sl">/</span><input class="vv-in vv-max" data-i="' + i + '" value="' + esc(max) + '" inputmode="decimal" placeholder="max"></div>'
-        + '<div class="vv-slabel">preso / max</div></div>'
+        + '<div class="vv-score"><input class="vv-in vv-preso" data-i="' + i + '" value="' + esc(preso) + '" inputmode="decimal" placeholder="voto"><span class="vv-sl">/</span><input class="vv-in vv-max" data-i="' + i + '" value="' + esc(max) + '" inputmode="decimal" placeholder="max"></div>'
+        + '<div class="vv-rowerr" data-i="' + i + '" style="display:none; color:#b4472f; font-size:11px; margin-top:6px;">Il voto non può superare il massimo</div></div>'
         + '<textarea class="vv-ta vv-giud" data-i="' + i + '" rows="4" placeholder="Giudizio sulla fattura…">' + esc(giud) + '</textarea>'
         + '</div>';
     }).join('');
@@ -3269,6 +3283,7 @@
   }
   function salvaValutazione(){
     var v = vvCollect();
+    if(v.hasError){ showAlert('Il voto preso non può superare il massimo. Correggi le fatture evidenziate in rosso.'); return; }
     v.pubblicata = (VC.val && VC.val.pubblicata) || false;
     v.data = new Date().toISOString();
     v.nome = VC.nome || '';
