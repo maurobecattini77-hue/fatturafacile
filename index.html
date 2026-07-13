@@ -2308,7 +2308,7 @@
   }
   function goGate(){
     stopAttesaWatcher(); stopPresenza(); stopCollegatiTimer(); stopBloccoWatcher(); stopConsegnaWatcher(); stopAssegnazioneWatcher(); STATE.riammesso = false; if(STATE.studente){ cloudClearPresenza(STATE.studente.pin); STATE.studente = null; }
-    try{ sessionStorage.removeItem('ff_studente_attivo'); }catch(e){}
+    try{ sessionStorage.removeItem('ff_studente_attivo'); sessionStorage.removeItem('ff_docente_attivo'); }catch(e){}
     byId('gate-doc').style.display = 'none'; byId('gate-pin').style.display = '';
     byId('in-pin').value = ''; byId('in-pass').value = '';
     byId('err-alunno').textContent = ''; byId('err-docente').textContent = '';
@@ -2489,6 +2489,7 @@
       STATE.mieAssegnate = lista;
       STATE.multiMode = lista.length > 1;
       STATE.consegnata = false; // rientro per lavorare: azzera il flag PRIMA del ping presenza (evita ri-blocco dopo Riammetti)
+      try{ if(pin) sessionStorage.setItem('ff_studente_attivo', pin); }catch(e){} // dopo un refresh resta dov'era (menù o fattura), niente PIN di nuovo
       startPresenza();
       startConsegnaWatcher();
       startAssegnazioneWatcher();
@@ -2902,6 +2903,7 @@
   byId('btn-entra-docente').addEventListener('click', function(){
     var p = (byId('in-pass').value||'');
     if(p !== PASSWORD_DOCENTE){ byId('err-docente').textContent = 'Password errata.'; return; }
+    try{ sessionStorage.setItem('ff_docente_attivo', '1'); }catch(e){} // dopo un refresh resta nella dashboard (niente password di nuovo)
     renderDocente(); show('docente'); startCollegatiTimer();
   });
 
@@ -3024,11 +3026,23 @@
   byId('editor').addEventListener('click', function(){ setTimeout(aggiornaNeretto, 0); }); // dopo aggiunta/rimozione articoli o sconti
   // Dopo un F5: se c'è un alunno attivo, torna direttamente alla sua compilazione.
   try{
+    var attivoDoc = sessionStorage.getItem('ff_docente_attivo');
     var attivo = sessionStorage.getItem('ff_studente_attivo');
-    var alu = (attivo && CLASSE && CLASSE.alunni) ? CLASSE.alunni.find(function(a){ return a.pin === attivo; }) : null;
-    // Dopo un F5 rientra passando dal contesto (menù se più fatture, singola se una sola).
-    if(alu){ STATE.studente = alu; buildRubrica(); cloudLeggiContestoAlunno(alu.pin, avviaAlunnoConLista); }
-    else { goGate(); }
+    if(attivoDoc){
+      // DOCENTE: dopo un refresh resta nella sua dashboard, senza rimettere la password.
+      renderDocente(); show('docente'); startCollegatiTimer();
+    } else if(attivo){
+      var alu = (CLASSE && CLASSE.alunni) ? CLASSE.alunni.find(function(a){ return a.pin === attivo; }) : null;
+      // Dopo un F5 rientra passando dal contesto (menù se più fatture, singola se una sola).
+      if(alu){ STATE.studente = alu; buildRubrica(); cloudLeggiContestoAlunno(alu.pin, avviaAlunnoConLista); }
+      else {
+        // Dispositivo dell'alunno senza classe caricata in locale: recupera l'alunno dal cloud e rientra dov'era.
+        cloudLoginPin(attivo, function(stud){
+          if(stud){ STATE.studente = stud; if(!CLASSE) CLASSE = { classe:(stud.classe||''), alunni:[stud] }; cloudCaricaContesto(function(){ buildRubrica(); cloudLeggiContestoAlunno(attivo, avviaAlunnoConLista); }); }
+          else { goGate(); }
+        });
+      }
+    } else { goGate(); }
   }catch(e){ goGate(); }
   /* fine boot */
 })();
