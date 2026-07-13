@@ -3013,8 +3013,8 @@
   byId('btnChiudi').addEventListener('click', function(){
     if(STATE.consegnata) return;
     var msgCons = STATE.multiMode
-      ? 'Vuoi consegnare questa fattura? Una volta consegnata non potrai più modificarla.'
-      : 'Vuoi consegnare l\'esercitazione? Una volta consegnata non potrai più modificarla.';
+      ? 'Vuoi consegnare questa fattura? Una volta consegnata non potrai più modificarla né vedere le soluzioni.'
+      : 'Vuoi consegnare l\'esercitazione? Una volta consegnata non potrai più modificarla né vedere le soluzioni.';
     showConfirm(msgCons, function(){
       STATE.consegnata = true;
       catturaConsegnaCorrente(); // cattura + salva nel cloud la fattura corrente (e la segna consegnata in locale)
@@ -3025,7 +3025,15 @@
         if(CLOUD_STUD[STATE.studente.pin]){ CLOUD_STUD[STATE.studente.pin].consegnata = tutteFatte; CLOUD_STUD[STATE.studente.pin].stato = (tutteFatte?'consegnato':'in_corso'); }
       }
       try{ if(tutteFatte && STATE.studente) sessionStorage.removeItem('ff_studente_attivo'); }catch(e){}
-      viewCortesiaCorretta();
+      // VERIFICA: la consegna è DEFINITIVA e SENZA feedback. Non mostriamo MAI la soluzione all'alunno
+      // (né cortesia corretta, né dashboard corretta). Le soluzioni restano salvate nel cloud per l'export docente.
+      if(tutteFatte){
+        stopAssegnazioneWatcher(); stopConsegnaWatcher(); stopPresenza();
+        mostraBloccoMsg('✅', 'Verifica consegnata', 'Hai consegnato la verifica: non puoi più modificarla e le soluzioni non sono visibili. Se il docente ti riammette, potrai rientrare.', '#2f7d54');
+        startBloccoWatcher();
+      } else {
+        mostraMenuFatture(); // restano fatture da fare → torna al menù (nessuna soluzione mostrata)
+      }
     });
   });
   document.addEventListener('mousedown', function(e){ if(!e.target.closest('.ana-search-wrap')){ document.querySelectorAll('.ana-dd').forEach(function(d){ d.classList.remove('open'); }); } });
