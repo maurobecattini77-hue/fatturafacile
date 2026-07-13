@@ -852,7 +852,8 @@
     STATE.correctCortesiaHTML = buildCortesia(STATE.soluzioneCorrente);
     try{ mostraSoluzioneCompilatore(); commitValues(byId('editor')); STATE.correctDashboardHTML = byId('editor').innerHTML; }catch(e){ STATE.correctDashboardHTML = ''; }
     cloudSalvaConsegna();
-    try{ localStorage.removeItem('ff_lavoro_' + STATE.studente.pin); }catch(e){}
+    // NON cancello il lavoro salvato (chiave per fattura): se il docente la riammette, l'alunno lo ritrova
+    // e può ricontrollare/riconsegnare. Viene ripulito al cambio classe / Reset (gestore 'storage').
   }
   /* Consegna forzata dal DOCENTE, eseguita sul dispositivo dell'ALUNNO (quando connesso):
      cattura la fattura in corso (lavoro reale), segna "non svolta" le altre non consegnate,
@@ -953,11 +954,23 @@
     try{ SB.from('fatt_studenti').update({ stato:stato }).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
     if(CLOUD_STUD[pin]) CLOUD_STUD[pin].stato = stato;
   }
-  function cloudRiammetti(pin){
+  // azzeraConsegne=true (pulsante "Riammetti", dopo consegna): l'alunno torna IN CORSO e tutte le sue
+  //   fatture tornano DA CONSEGNARE (le consegne nel cloud vengono cancellate). Il suo lavoro resta salvato
+  //   sul suo dispositivo (chiavi ff_lavoro per fattura), così rientrando lo ritrova e può riconsegnare.
+  // azzeraConsegne=false (pulsante "Sblocca", doppio accesso): lo fa solo rientrare, senza toccare le consegne.
+  function cloudRiammetti(pin, azzeraConsegne){
     if(!SB || !pin) return;
-    try{ SB.from('fatt_studenti').update({ riammesso:true }).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
-    // Rimuovi le consegne "forzate/non svolte": così, rientrando, l'alunno può rifarle davvero.
-    try{ SB.from('fatt_tentativi').delete().eq('pin', pin).eq('modalita', 'forzata').then(function(){}, function(){}); }catch(e){}
+    var upd = azzeraConsegne ? { riammesso:true, stato:'in_corso', consegnata:false } : { riammesso:true };
+    try{ SB.from('fatt_studenti').update(upd).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
+    if(azzeraConsegne){
+      // Cancella TUTTE le sue consegne nel cloud: nessuna fattura risulta più consegnata → tornano da fare.
+      try{ SB.from('fatt_tentativi').delete().eq('pin', pin).then(function(){}, function(){}); }catch(e){}
+      if(CLOUD_STUD[pin]){ CLOUD_STUD[pin].stato = 'in_corso'; CLOUD_STUD[pin].consegnata = false; }
+      CLOUD_CONS[pin] = {};
+    } else {
+      // Solo sblocco: rimuovi le consegne "forzate/non svolte" così, rientrando, l'alunno può rifarle davvero.
+      try{ SB.from('fatt_tentativi').delete().eq('pin', pin).eq('modalita', 'forzata').then(function(){}, function(){}); }catch(e){}
+    }
     if(CLOUD_STUD[pin]) CLOUD_STUD[pin].riammesso = true;
   }
   /* ---------- Sorvegliante del CAMBIO ASSEGNAZIONE in tempo reale (lato alunno) ---------- */
@@ -971,10 +984,15 @@
     stopAssegnazioneWatcher();
     if(!SB) return;
     STATE.assWatchTimer = setInterval(function(){
-      if(!STATE.studente || STATE.consegnata || STATE.assModaleAperta) return;
+      if(!STATE.studente || STATE.assModaleAperta) return;
       if(byId('attesa').style.display !== 'none' || byId('blocco').style.display !== 'none') return; // gestiti altrove
       cloudLeggiContestoAlunno(STATE.studente.pin, function(ctx){
-        if(!STATE.studente || STATE.consegnata || STATE.assModaleAperta) return;
+        if(!STATE.studente || STATE.assModaleAperta) return;
+        // (1) Il docente ha RIAMMESSO l'alunno mentre è in sessione (anche fermo sul menù "tutte consegnate"):
+        //     tutte le fatture tornano DA CONSEGNARE, col suo lavoro salvato dentro.
+        if(ctx && ctx.riammesso && !STATE.riammConsumando){ applicaRiammissioneInSessione(); return; }
+        // (2) Cambio assegnazione dal docente — solo se non ha già consegnato tutto.
+        if(STATE.consegnata) return;
         if(ctx && ctx.stato === 'consegnato') return;
         var nuova = ((ctx && ctx.lista) || []).filter(function(x){ return FATTURE.some(function(f){ return f.id === x.id; }); });
         if(!nuova.length) return;
@@ -1008,7 +1026,7 @@
     ov.querySelector('.modal-btn-ok').addEventListener('click', function(){
       closeModal(ov); STATE.assModaleAperta = false;
       // Accetta: abbandona la fattura corrente (rimossa) e passa alla nuova assegnazione.
-      try{ if(STATE.studente) localStorage.removeItem('ff_lavoro_' + STATE.studente.pin); }catch(e){}
+      try{ if(STATE.studente && STATE.assegnataId) localStorage.removeItem('ff_lavoro_' + STATE.studente.pin + '_' + STATE.assegnataId); }catch(e){}
       STATE.assegnataId = null; STATE.consegnata = false;
       STATE.mieAssegnate = nuova; STATE.multiMode = nuova.length > 1;
       if(nuova.length > 1){ mostraMenuFatture(); }
@@ -1025,6 +1043,23 @@
     });
     document.body.appendChild(ov);
     ov.querySelector('.modal-btn-ok').focus();
+  }
+  // Riammissione ricevuta mentre l'alunno è GIÀ in sessione (di solito fermo sul menù dopo aver consegnato tutto):
+  // il docente gli ha ridato accesso → tutte le fatture tornano DA CONSEGNARE (il suo lavoro è salvato sul dispositivo,
+  // lo ritrova riaprendo), e lui torna al menù per rivederle/finirle e riconsegnarle.
+  function applicaRiammissioneInSessione(){
+    var pin = STATE.studente ? STATE.studente.pin : null; if(!pin) return;
+    STATE.riammConsumando = true;
+    STATE.riammesso = true;
+    STATE.consegnata = false;
+    // Consuma il flag lato cloud e riporta lo stato "in corso".
+    try{ if(SB) SB.from('fatt_studenti').update({ riammesso:false, stato:'in_corso', consegnata:false }).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
+    // Le consegne sono state cancellate dal docente: ricostruendo dal cloud nessuna fattura risulta più consegnata.
+    rebuildConsegnateLocali(pin, function(){
+      STATE.riammConsumando = false;
+      if((STATE.mieAssegnate || []).length === 1){ apriFatturaMenu(STATE.mieAssegnate[0]); }
+      else { mostraMenuFatture(); }
+    });
   }
   /* ---------- CONSEGNA FORZATA dal docente (campanella di fine verifica) ----------
      SEMPRE lato docente: marca «non svolta» le fatture non consegnate e segna consegnato.
@@ -1239,11 +1274,11 @@
       var loc = null, locL = null; try{ loc = localStorage.getItem('ff_assegnata') || null; locL = localStorage.getItem('ff_livello') || null; }catch(e){}
       cb && cb({ fattura:assegnPrimoId(loc), livello:(assegnPrimoLiv(loc) || locL), lista:parseAssegnazione(loc) }); return;
     }
-    var out = { fattura:null, livello:null, lista:[], stato:null, consegnata:false };
+    var out = { fattura:null, livello:null, lista:[], stato:null, consegnata:false, riammesso:false };
     try{
-      SB.from('fatt_studenti').select('fattura_assegnata,livello_assegnato,stato,consegnata').eq('pin', pin).maybeSingle().then(function(r1){
+      SB.from('fatt_studenti').select('fattura_assegnata,livello_assegnato,stato,consegnata,riammesso').eq('pin', pin).maybeSingle().then(function(r1){
         var per = (r1 && r1.data) ? r1.data : null;
-        if(per){ out.stato = per.stato || null; out.consegnata = !!per.consegnata; }
+        if(per){ out.stato = per.stato || null; out.consegnata = !!per.consegnata; out.riammesso = !!per.riammesso; }
         if(per && per.fattura_assegnata){ out.fattura = assegnPrimoId(per.fattura_assegnata); out.livello = assegnPrimoLiv(per.fattura_assegnata) || per.livello_assegnato || null; out.lista = parseAssegnazione(per.fattura_assegnata); cb && cb(out); return; }
         SB.from('fatt_config').select('assegnata_id,livello').eq('id', 1).maybeSingle().then(function(r2){
           var cfg = (r2 && r2.data) ? r2.data : null;
@@ -2282,10 +2317,10 @@
     var b = document.createElement('button');
     if(want === 'sblocca'){
       b.className = 'btn-sblocca'; b.textContent = '🔓 Sblocca';
-      b.addEventListener('click', function(){ cloudRiammetti(a.pin); showAlert(a.cognome + ' ' + a.nome + ' è stato sbloccato: può rientrare e riprendere da dove aveva lasciato.'); refreshCloudStud(function(){ refreshConsegne(renderDocente); }); });
+      b.addEventListener('click', function(){ cloudRiammetti(a.pin, false); showAlert(a.cognome + ' ' + a.nome + ' è stato sbloccato: può rientrare e riprendere da dove aveva lasciato.'); refreshCloudStud(function(){ refreshConsegne(renderDocente); }); });
     } else if(want === 'riammetti'){
       b.className = 'btn-riammetti'; b.textContent = 'Riammetti';
-      b.addEventListener('click', function(){ cloudRiammetti(a.pin); showAlert(a.cognome + ' ' + a.nome + ' potrà rientrare una volta.'); refreshCloudStud(function(){ refreshConsegne(renderDocente); }); });
+      b.addEventListener('click', function(){ cloudRiammetti(a.pin, true); showAlert(a.cognome + ' ' + a.nome + ' è stato riammesso: le sue fatture tornano da consegnare (ritrova il suo lavoro) e potrà riconsegnarle.'); refreshCloudStud(function(){ refreshConsegne(renderDocente); }); });
     } else if(want === 'consegna'){
       b.className = 'btn-consegna-uno'; b.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4z"/></svg>Consegna';
       b.addEventListener('click', function(){ showConfirm('Consegnare ORA la verifica di ' + a.cognome + ' ' + a.nome + '? Le fatture non ancora consegnate risulteranno «non svolte».', function(){ forzaConsegna(a.pin); refreshCloudStud(function(){ refreshConsegne(renderDocente); }); showAlert('Verifica consegnata per ' + a.cognome + ' ' + a.nome + '.'); }); });
@@ -2485,7 +2520,7 @@
     var ripristinato = false;
     try{
       sessionStorage.setItem('ff_studente_attivo', STATE.studente.pin);
-      var raw = localStorage.getItem('ff_lavoro_' + STATE.studente.pin);
+      var raw = localStorage.getItem('ff_lavoro_' + STATE.studente.pin + '_' + STATE.assegnataId);
       if(raw){
         var saved = JSON.parse(raw);
         if(saved && saved.esercizioId === STATE.assegnataId && saved.html){
@@ -2645,7 +2680,7 @@
       var ed = byId('editor');
       if(!ed || ed.classList.contains('sol-mode')) return;
       commitValues(ed);
-      localStorage.setItem('ff_lavoro_' + STATE.studente.pin, JSON.stringify({ esercizioId: STATE.assegnataId, html: ed.innerHTML }));
+      localStorage.setItem('ff_lavoro_' + STATE.studente.pin + '_' + STATE.assegnataId, JSON.stringify({ esercizioId: STATE.assegnataId, html: ed.innerHTML }));
     }catch(e){}
   }
 
