@@ -220,6 +220,25 @@
   .vc-pdf{ border:1px solid #6ee7b7; background:#ecfdf5; color:#065f46; border-radius:10px; padding:8px 15px; cursor:pointer; font-size:14px; font-family:inherit; }
   .vc-esci{ border:1px solid #cfd8e6; background:#fff; border-radius:10px; padding:8px 15px; cursor:pointer; font-size:14px; color:#254a86; font-family:inherit; }
   .vc-esci:hover{ background:#f4f7fb; }
+  /* ---- Scheda VALUTAZIONE (verifiche): righe larghe, riepilogo centrato ---- */
+  .btn-valuta{ border:none; background:#254a86; color:#fff; border-radius:8px; padding:8px 16px; font-family:inherit; font-size:13px; font-weight:600; cursor:pointer; }
+  .btn-valuta:hover{ background:#1c3a6b; }
+  .btn-valuta b{ font-weight:700; }
+  .vv-sum{ display:flex; background:#eef3fb; border:1px solid #cddcf0; border-radius:12px; padding:16px 18px; margin-bottom:14px; }
+  .vv-col{ flex:1; text-align:center; }
+  .vv-lab{ font-size:12px; color:#5b6b82; margin-bottom:5px; }
+  .vv-val{ font-size:20px; color:#254a86; font-weight:500; }
+  .vv-voto{ font-size:34px; line-height:1; }
+  .vv-rows{ display:flex; flex-direction:column; gap:12px; }
+  .vv-row{ display:flex; gap:18px; background:#fff; border:1px solid #e3e7ee; border-radius:12px; padding:16px; }
+  .vv-left{ flex:0 0 150px; }
+  .vv-fh{ font-weight:600; color:#254a86; margin-bottom:10px; }
+  .vv-score{ display:flex; align-items:center; gap:7px; }
+  .vv-sl{ color:#8a94a6; font-size:18px; }
+  .vv-slabel{ font-size:11px; color:#8a94a6; margin-top:5px; }
+  .vv-in{ font-family:inherit; font-size:16px; border:1px solid #cfd8e6; border-radius:8px; padding:7px 8px; width:56px; text-align:center; color:#2b3346; }
+  .vv-ta{ font-family:inherit; font-size:14px; line-height:1.5; border:1px solid #cfd8e6; border-radius:8px; padding:10px 12px; flex:1; resize:vertical; color:#2b3346; min-height:96px; box-sizing:border-box; }
+  @media(max-width:640px){ .vv-row{ flex-direction:column; } .vv-left{ flex:auto; } }
   #editor.sol-mode #toolbar,
   #editor.sol-mode #btnFinalizza,
   #editor.sol-mode .trash,
@@ -448,7 +467,7 @@
     <div class="tile"><div class="tile-num" id="tile-consegnati">0</div><div class="tile-lbl">Consegnati</div></div>
   </div>
   <table class="roster">
-    <thead><tr><th style="width:36px;">#</th><th style="width:230px;">Cognome e nome</th><th style="width:90px;">PIN</th><th style="width:230px;">Esercizio assegnato</th><th style="width:230px;">Stato</th><th style="width:130px;">Azioni</th><th></th></tr></thead>
+    <thead><tr><th style="width:36px;">#</th><th style="width:230px;">Cognome e nome</th><th style="width:90px;">PIN</th><th style="width:210px;">Esercizio assegnato</th><th style="width:210px;">Stato</th><th style="width:120px;">Azioni</th><th style="width:120px;">Valuta</th></tr></thead>
     <tbody id="roster-body"></tbody>
   </table>
 </div>
@@ -656,6 +675,13 @@
     <div class="banner" id="sol-view-banner"></div>
     <div class="cx-actions" id="sol-view-actions"></div>
     <div id="soluzione-page" class="cx-page"></div>
+  </div>
+</div>
+
+<div id="valuta-view" style="display:none;">
+  <div class="wrap" style="padding-top:22px;">
+    <div id="valuta-bar" style="margin-bottom:16px;"></div>
+    <div id="valuta-body"></div>
   </div>
 </div>
 
@@ -2471,7 +2497,7 @@
 
   /* ---------- Router viste ---------- */
   function show(id){
-    ['gate','docente','attesa','blocco','menu-fatture','editor','cortesia-view','soluzione-view'].forEach(function(x){ byId(x).style.display = (x===id) ? '' : 'none'; });
+    ['gate','docente','attesa','blocco','menu-fatture','editor','cortesia-view','soluzione-view','valuta-view'].forEach(function(x){ byId(x).style.display = (x===id) ? '' : 'none'; });
     var vb = byId('verifica-bar'); if(vb) vb.style.display = (id==='editor') ? '' : 'none';
     var tb = document.querySelector('.topbar'); if(tb) tb.style.display = (id==='gate') ? 'none' : '';
     if(id==='editor'){ document.querySelectorAll('#editor textarea').forEach(function(t){ autogrow(t); }); }
@@ -2561,6 +2587,17 @@
       b.addEventListener('click', function(){ showConfirm('Consegnare ORA la verifica di ' + a.cognome + ' ' + a.nome + '? Le fatture non ancora consegnate risulteranno «non svolte».', function(){ forzaConsegna(a.pin); refreshCloudStud(function(){ refreshConsegne(renderDocente); }); showAlert('Verifica consegnata per ' + a.cognome + ' ' + a.nome + '.'); }); });
     }
     return b;
+  }
+  // Cella "Valuta" della dashboard: apre la scheda di valutazione del singolo alunno.
+  // Se già valutato, mostra il voto sul pulsante.
+  function buildValutaCell(a){
+    var td = document.createElement('td'); td.className = 'az-cell';
+    var val = (CLOUD_STUD[a.pin] || {}).valutazione;
+    var b = document.createElement('button'); b.className = 'btn-valuta';
+    if(val && val.voto_finale){ b.innerHTML = '<b>' + esc(String(val.voto_finale)) + '</b> · Valuta'; b.title = 'Voto attuale ' + val.voto_finale + '. Clicca per rivedere o modificare.'; }
+    else { b.textContent = 'Valuta'; }
+    b.addEventListener('click', function(){ apriValutazione(a); });
+    td.appendChild(b); return td;
   }
   /* ---------- MULTI-CLASSE: elenco classi dal cloud + classe attiva ---------- */
   var CLASSES = [];
@@ -2654,7 +2691,7 @@
       var tdAz = document.createElement('td'); tdAz.className = 'az-cell';
       var wantR = wantAz(st); tdAz.setAttribute('data-az', wantR);
       var azbR = buildAzButton(wantR, a); if(azbR) tdAz.appendChild(azbR);
-      tr.appendChild(tdN); tr.appendChild(tdNome); tr.appendChild(tdPin); tr.appendChild(tdAss); tr.appendChild(tdSt); tr.appendChild(tdAz); tr.appendChild(document.createElement('td'));
+      tr.appendChild(tdN); tr.appendChild(tdNome); tr.appendChild(tdPin); tr.appendChild(tdAss); tr.appendChild(tdSt); tr.appendChild(tdAz); tr.appendChild(buildValutaCell(a));
       tb.appendChild(tr);
     });
   }
@@ -3110,13 +3147,15 @@
      (#soluzione-page per le cortesie, #editor.sol-mode per le dashboard). */
   var VC = { fatture:[], cf:0, ct:0, mode:'alunno', cognome:'', exitFn:null };
   function vcLabel(i){
-    if(VC.mode === 'docente'){ var c = VC.cognome ? (' ' + VC.cognome) : ''; return ['Fattura' + c, 'Fattura corretta', 'Dashboard' + c, 'Dashboard corretta'][i]; }
+    if(i === 4) return 'Valutazione';
+    if(VC.mode === 'docente' || VC.mode === 'valuta'){ var c = VC.cognome ? (' ' + VC.cognome) : ''; return ['Fattura' + c, 'Fattura corretta', 'Dashboard' + c, 'Dashboard corretta'][i]; }
     return ['La mia fattura', 'Fattura corretta', 'La mia dashboard', 'Dashboard corretta'][i];
   }
   function mostraViewerCompiti(rec, mode, exitFn){
     VC.fatture = (rec && rec.fatture) || [];
     VC.cf = (rec && rec.cf) ? rec.cf : 0;
     VC.ct = 0; VC.mode = mode || 'alunno'; VC.cognome = (rec && rec.cognome) || ''; VC.exitFn = exitFn || null;
+    VC.pin = (rec && rec.pin) || ''; VC.nome = (rec && rec.nome) || ''; VC.val = (rec && rec.valutazione) || null;
     if(!VC.fatture.length){ showAlert('Nessuna fattura da mostrare.'); if(VC.exitFn) VC.exitFn(); return; }
     if(VC.cf >= VC.fatture.length) VC.cf = 0;
     vcGo();
@@ -3133,7 +3172,8 @@
     }
     var row = document.createElement('div'); row.className = 'vc-row';
     var tabs = document.createElement('div'); tabs.className = 'vc-tabs';
-    for(var i = 0; i < 4; i++){ (function(i){
+    var nTabs = (VC.mode === 'valuta') ? 5 : 4;
+    for(var i = 0; i < nTabs; i++){ (function(i){
       var b = document.createElement('button'); b.type = 'button'; b.className = 'vc-tab' + (i === VC.ct ? ' active' : '');
       b.textContent = vcLabel(i); b.addEventListener('click', function(){ VC.ct = i; vcGo(); }); tabs.appendChild(b);
     })(i); }
@@ -3141,13 +3181,14 @@
     var sp = document.createElement('div'); sp.className = 'vc-spacer';
     if(VC.ct <= 1){ var pdf = document.createElement('button'); pdf.type = 'button'; pdf.className = 'vc-pdf'; pdf.textContent = 'Scarica PDF'; pdf.addEventListener('click', function(){ stampa('soluzione-view'); }); sp.appendChild(pdf); }
     var esci = document.createElement('button'); esci.type = 'button'; esci.className = 'vc-esci';
-    esci.textContent = (VC.mode === 'docente') ? '← Torna ai nomi' : '← Torna ai compiti';
+    esci.textContent = (VC.mode === 'valuta') ? '← Torna alla dashboard' : ((VC.mode === 'docente') ? '← Torna ai nomi' : '← Torna ai compiti');
     esci.addEventListener('click', function(){ if(VC.exitFn) VC.exitFn(); });
     sp.appendChild(esci); row.appendChild(sp); bar.appendChild(row);
     return bar;
   }
   function vcGo(){
     var f = VC.fatture[VC.cf] || {};
+    if(VC.ct === 4){ vcRenderValutazione(); window.scrollTo(0, 0); return; }
     if(VC.ct <= 1){
       var page = byId('soluzione-page'); page.innerHTML = (VC.ct === 0 ? (f.cortesiaAlunno || '<i>—</i>') : (f.cortesiaCorretta || '<i>—</i>'));
       var act = byId('sol-view-actions'); if(act){ act.innerHTML = ''; act.style.display = 'none'; }
@@ -3161,6 +3202,92 @@
       var vb = byId('verifica-bar'); if(vb) vb.style.display = 'none';
     }
     window.scrollTo(0, 0);
+  }
+
+  /* ---------- VALUTAZIONE (verifiche): scala voti, calcolo, salvataggio ---------- */
+  // Scala di Mauro fino al 51,5%. Sopra 51,5% è PROVVISORIA (lineare 5→10) finché non dà le fasce esatte.
+  var VOTO_BANDS = [ {min:0,v:'3'}, {min:30.1,v:'4'}, {min:41.6,v:'4+'}, {min:43.6,v:'4,5'}, {min:47.1,v:'5−'}, {min:49.1,v:'5'} ];
+  function votoDaPerc(p){
+    if(p == null || isNaN(p)) return '—';
+    if(p <= 51.5){ var b = VOTO_BANDS[0]; for(var i = 0; i < VOTO_BANDS.length; i++){ if(p >= VOTO_BANDS[i].min) b = VOTO_BANDS[i]; } return b.v; }
+    var raw = 5 + (p - 51.5) / (100 - 51.5) * 5; var half = Math.round(raw * 2) / 2; if(half > 10) half = 10;
+    return (half % 1 === 0) ? String(half) : (Math.floor(half) + ',5');
+  }
+  function vvParse(s){ s = String(s == null ? '' : s).replace(',', '.').trim(); if(s === '') return NaN; var n = Number(s); return isNaN(n) ? NaN : n; }
+  function vvFmt(n){ if(n == null || isNaN(n)) return '—'; var r = Math.round(n * 100) / 100; return String(r).replace('.', ','); }
+  function vvSummaryHtml(v){
+    var tot = (v && v.max_tot) ? (vvFmt(v.totale) + ' / ' + vvFmt(v.max_tot)) : '— / —';
+    var perc = (v && v.perc != null) ? (Math.round(v.perc) + '%') : '—';
+    var voto = (v && v.voto_finale) ? v.voto_finale : '—';
+    return '<div class="vv-col"><div class="vv-lab">Totale</div><div class="vv-val">' + tot + '</div></div>'
+      + '<div class="vv-col"><div class="vv-lab">Percentuale</div><div class="vv-val">' + perc + '</div></div>'
+      + '<div class="vv-col"><div class="vv-lab">Voto finale</div><div class="vv-val vv-voto">' + esc(String(voto)) + '</div></div>';
+  }
+  function vvCollect(){
+    var host = byId('valuta-body'); var items = [], totP = 0, totM = 0, anyM = false;
+    VC.fatture.forEach(function(f, i){
+      var pEl = host.querySelector('.vv-preso[data-i="' + i + '"]');
+      var mEl = host.querySelector('.vv-max[data-i="' + i + '"]');
+      var gEl = host.querySelector('.vv-giud[data-i="' + i + '"]');
+      var p = pEl ? vvParse(pEl.value) : NaN, m = mEl ? vvParse(mEl.value) : NaN;
+      if(!isNaN(p)) totP += p; if(!isNaN(m)){ totM += m; anyM = true; }
+      items.push({ fattura_id:f.id, num:f.num, voto:(pEl && pEl.value.trim() !== '' ? p : null), max:(mEl && mEl.value.trim() !== '' ? m : null), giudizio:(gEl ? gEl.value : '') });
+    });
+    var perc = anyM && totM > 0 ? (totP / totM * 100) : null;
+    return { items:items, totale:totP, max_tot:(anyM ? totM : 0), perc:perc, voto_finale:(perc != null ? votoDaPerc(perc) : null) };
+  }
+  function vvRecalc(){ var v = vvCollect(); v.pubblicata = (VC.val && VC.val.pubblicata) || false; v.data = (VC.val && VC.val.data) || null; VC.val = v; var s = byId('vv-sum'); if(s) s.innerHTML = vvSummaryHtml(v); }
+  function vcRenderValutazione(){
+    var host = byId('valuta-body'); if(!host) return;
+    var val = VC.val || {}; var saved = {};
+    (val.items || []).forEach(function(it){ saved[it.fattura_id != null ? it.fattura_id : it.num] = it; });
+    var rowsHtml = VC.fatture.map(function(f, i){
+      var s = saved[f.id != null ? f.id : f.num] || {};
+      var preso = (s.voto != null ? vvFmt(s.voto) : '');
+      var max = (s.max != null ? vvFmt(s.max) : '');
+      var giud = s.giudizio || '';
+      return '<div class="vv-row">'
+        + '<div class="vv-left"><div class="vv-fh">Fattura ' + esc(f.num) + (f.nonSvolta ? ' · non svolta' : '') + '</div>'
+        + '<div class="vv-score"><input class="vv-in vv-preso" data-i="' + i + '" value="' + esc(preso) + '" inputmode="decimal" placeholder="—"><span class="vv-sl">/</span><input class="vv-in vv-max" data-i="' + i + '" value="' + esc(max) + '" inputmode="decimal" placeholder="max"></div>'
+        + '<div class="vv-slabel">preso / max</div></div>'
+        + '<textarea class="vv-ta vv-giud" data-i="' + i + '" rows="4" placeholder="Giudizio sulla fattura…">' + esc(giud) + '</textarea>'
+        + '</div>';
+    }).join('');
+    host.innerHTML = '<div class="vv-sum" id="vv-sum"></div><div class="vv-rows">' + rowsHtml + '</div>'
+      + '<div style="margin-top:16px; text-align:right;"><button class="btn-consegna" id="vv-salva"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:7px;"><path d="M5 12l5 5l10 -10"/></svg>Salva valutazione</button></div>';
+    host.querySelectorAll('.vv-in, .vv-giud').forEach(function(el){ el.addEventListener('input', vvRecalc); });
+    byId('vv-salva').addEventListener('click', salvaValutazione);
+    var bar = byId('valuta-bar'); if(bar){ bar.innerHTML = ''; bar.appendChild(vcBarNode()); }
+    show('valuta-view');
+    vvRecalc();
+  }
+  function salvaValutazione(){
+    var v = vvCollect();
+    v.pubblicata = (VC.val && VC.val.pubblicata) || false;
+    v.data = new Date().toISOString();
+    v.nome = VC.nome || '';
+    VC.val = v;
+    if(SB && VC.pin){ try{ SB.from('fatt_studenti').update({ valutazione:v }).eq('pin', VC.pin).then(function(){}, function(){}); }catch(e){} }
+    if(VC.pin){ if(!CLOUD_STUD[VC.pin]) CLOUD_STUD[VC.pin] = { pin:VC.pin }; CLOUD_STUD[VC.pin].valutazione = v; }
+    var s = byId('vv-sum'); if(s) s.innerHTML = vvSummaryHtml(v);
+    showAlert('Valutazione salvata per ' + (VC.nome || 'l\'alunno') + (v.voto_finale ? (' — voto ' + v.voto_finale) : '') + '. La ritrovi in dashboard.');
+  }
+  function apriValutazione(a){
+    if(!SB){ showAlert('Cloud non disponibile.'); return; }
+    var assigned = effectiveAssignedList(a.pin);
+    if(!assigned.length){ showAlert('Nessuna fattura assegnata a ' + a.cognome + ' ' + a.nome + ': non c\'è nulla da valutare.'); return; }
+    SB.from('fatt_tentativi').select('fattura_id,risposte,created_at').eq('pin', a.pin).eq('completato', true).neq('modalita', 'compiti').order('created_at', {ascending:true}).then(function(res){
+      var rows = (res && res.data) || []; var byF = {};
+      rows.forEach(function(r){ if(r.fattura_id) byF[r.fattura_id] = r.risposte || {}; });
+      var fatture = assigned.slice().sort(function(x, y){ return (parseInt(numeroFattura(x.id), 10) || 0) - (parseInt(numeroFattura(y.id), 10) || 0); }).map(function(x){
+        var rr = byF[x.id] || null;
+        return { id:x.id, num:numeroFattura(x.id), nonSvolta:!rr,
+          cortesiaAlunno: rr ? (rr.cortesiaAlunno || '') : '', cortesiaCorretta: rr ? (rr.cortesiaCorretta || '') : '',
+          dashboardAlunno: rr ? (rr.dashboardAlunno || '') : '', dashboardCorretta: rr ? (rr.dashboardCorretta || '') : '' };
+      });
+      var val = (CLOUD_STUD[a.pin] || {}).valutazione || null;
+      mostraViewerCompiti({ pin:a.pin, nome:(a.cognome + ' ' + a.nome).trim(), cognome:(a.cognome || ''), valutazione:val, cf:0, fatture:fatture }, 'valuta', function(){ show('docente'); renderDocente(); });
+    }, function(){ showAlert('Errore nel caricamento delle consegne di ' + a.nome + '.'); });
   }
 
   /* =========================================================
