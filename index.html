@@ -3205,13 +3205,19 @@
   }
 
   /* ---------- VALUTAZIONE (verifiche): scala voti, calcolo, salvataggio ---------- */
-  // Scala di Mauro fino al 51,5%. Sopra 51,5% è PROVVISORIA (lineare 5→10) finché non dà le fasce esatte.
-  var VOTO_BANDS = [ {min:0,v:'3'}, {min:30.1,v:'4'}, {min:41.6,v:'4+'}, {min:43.6,v:'4,5'}, {min:47.1,v:'5−'}, {min:49.1,v:'5'} ];
+  // Scala voti di Mauro. Sotto 30% = voto minimo 3. Dal 4 in su ottave uniformi di 10%
+  // con schema +2,0 (voto+), +3,5 (voto,5), +2,0 (voto−succ), +2,5 (voto succ). Fino a 10 al 100%.
+  var VOTO_BANDS = [
+    {min:0,v:'3'},   {min:30.1,v:'4'},  {min:41.6,v:'4+'}, {min:43.6,v:'4,5'}, {min:47.1,v:'5−'}, {min:49.1,v:'5'},
+    {min:51.6,v:'5+'}, {min:53.6,v:'5,5'}, {min:57.1,v:'6−'}, {min:59.1,v:'6'},
+    {min:61.6,v:'6+'}, {min:63.6,v:'6,5'}, {min:67.1,v:'7−'}, {min:69.1,v:'7'},
+    {min:71.6,v:'7+'}, {min:73.6,v:'7,5'}, {min:77.1,v:'8−'}, {min:79.1,v:'8'},
+    {min:81.6,v:'8+'}, {min:83.6,v:'8,5'}, {min:87.1,v:'9−'}, {min:89.1,v:'9'},
+    {min:91.6,v:'9+'}, {min:93.6,v:'9,5'}, {min:97.1,v:'10−'}, {min:99.1,v:'10'}
+  ];
   function votoDaPerc(p){
     if(p == null || isNaN(p)) return '—';
-    if(p <= 51.5){ var b = VOTO_BANDS[0]; for(var i = 0; i < VOTO_BANDS.length; i++){ if(p >= VOTO_BANDS[i].min) b = VOTO_BANDS[i]; } return b.v; }
-    var raw = 5 + (p - 51.5) / (100 - 51.5) * 5; var half = Math.round(raw * 2) / 2; if(half > 10) half = 10;
-    return (half % 1 === 0) ? String(half) : (Math.floor(half) + ',5');
+    var b = VOTO_BANDS[0]; for(var i = 0; i < VOTO_BANDS.length; i++){ if(p >= VOTO_BANDS[i].min) b = VOTO_BANDS[i]; } return b.v;
   }
   function vvParse(s){ s = String(s == null ? '' : s).replace(',', '.').trim(); if(s === '') return NaN; var n = Number(s); return isNaN(n) ? NaN : n; }
   function vvFmt(n){ if(n == null || isNaN(n)) return '—'; var r = Math.round(n * 100) / 100; return String(r).replace('.', ','); }
