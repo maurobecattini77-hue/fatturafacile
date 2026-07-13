@@ -415,7 +415,7 @@
     <button class="btn-ghost" id="btn-backup">Backup</button>
     <button class="btn-ghost" id="btn-ripristina">Ripristina</button>
     <input type="file" id="file-ripristina" accept=".json,application/json" style="display:none;" />
-    <button class="btn-red" id="btn-reset" style="margin-left:auto;">Reset (svuota tutto)</button>
+    <button class="btn-red" id="btn-reset" style="margin-left:auto;">Reset classe</button>
     <button class="btn-ghost" id="btn-esci-doc">Esci</button>
   </div>
   <div class="toolbar-doc">
@@ -973,6 +973,17 @@
     try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false }).gte('pin', '').then(function(){}, function(){}); }catch(e){}
     try{ SB.from('fatt_config').update({ assegnata_id:null, livello:null }).eq('id', 1).then(function(){}, function(){}); }catch(e){}
     try{ SB.from('fatt_tentativi').delete().neq('modalita', 'compiti').gte('created_at', '2000-01-01').then(function(){}, function(){}); }catch(e){} // il Reset NON tocca l'archivio compiti a casa
+  }
+  // Reset di UNA SOLA classe: azzera assegnazione e stato dei suoi alunni + cancella le sue consegne di VERIFICA.
+  // NON tocca le altre classi, né l'archivio fatture, né i compiti a casa. Il roster della classe resta.
+  function cloudResetClasse(classe){
+    if(!SB || !classe) return;
+    try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false }).eq('classe', classe).then(function(){}, function(){}); }catch(e){}
+    try{ SB.from('fatt_tentativi').delete().eq('classe', classe).neq('modalita', 'compiti').then(function(){}, function(){}); }catch(e){}
+    (CLASSE && CLASSE.alunni ? CLASSE.alunni : []).forEach(function(a){
+      if(CLOUD_STUD[a.pin]){ var s = CLOUD_STUD[a.pin]; s.stato='non_iniziato'; s.consegnata=false; s.riammesso=false; s.ultimo_accesso=null; s.fattura_assegnata=null; s.livello_assegnato=null; s.fattura_corrente=null; }
+      CLOUD_CONS[a.pin] = {};
+    });
   }
   // Blocco anti-doppio-accesso: controlla se l'alunno può entrare e aggiorna lo stato.
   function cloudCheckAccesso(pin, cb){
@@ -3392,16 +3403,21 @@
     }
   });
   byId('btn-reset').addEventListener('click', function(){
-    showConfirm('Vuoi svuotare tutto? Verranno rimosse la classe, le esercitazioni e l\'assegnazione.', function(){
-      CLASSE = null; FATTURE = []; STATE.assegnataId = null; buildRubrica(); cloudResetPresenze();
+    var cl = (CLASSE && CLASSE.classe) || STATE.classeAttiva || '';
+    if(!cl){ showAlert('Nessuna classe selezionata da azzerare. Carica o scegli una classe.'); return; }
+    showConfirm('Vuoi azzerare la classe ' + cl + '? Verranno rimosse l\'assegnazione e lo stato dei suoi alunni (comprese le verifiche consegnate). Restano il roster e i compiti a casa. Le ALTRE classi non vengono toccate.', function(){
+      cloudResetClasse(cl);
+      STATE.assegnate = []; STATE.assegnataId = null;
       try{
-        localStorage.removeItem('ff_classe'); localStorage.removeItem('ff_archivio'); localStorage.removeItem('ff_assegnata');
-        localStorage.removeItem('ff_livello'); sessionStorage.removeItem('ff_studente_attivo');
-        var da_rimuovere = [];
-        for(var i = 0; i < localStorage.length; i++){ var k = localStorage.key(i); if(k && (k.indexOf('ff_lavoro_') === 0 || k.indexOf('ff_consegnate_') === 0 || k.indexOf('ff_iniziate_') === 0)) da_rimuovere.push(k); }
-        da_rimuovere.forEach(function(k){ localStorage.removeItem(k); });
+        localStorage.removeItem('ff_assegnata'); localStorage.removeItem('ff_livello'); sessionStorage.removeItem('ff_studente_attivo');
+        (CLASSE && CLASSE.alunni ? CLASSE.alunni : []).forEach(function(a){
+          localStorage.removeItem('ff_consegnate_' + a.pin); localStorage.removeItem('ff_iniziate_' + a.pin);
+          var rm = []; for(var i = 0; i < localStorage.length; i++){ var k = localStorage.key(i); if(k && k.indexOf('ff_lavoro_' + a.pin + '_') === 0) rm.push(k); }
+          rm.forEach(function(k){ localStorage.removeItem(k); });
+        });
       }catch(e){}
       renderDocente();
+      showAlert('Classe ' + cl + ' azzerata. Ora, quando NON sei collegato, i suoi alunni entrando col PIN vanno ai compiti a casa.');
     });
   });
   byId('btn-carica-classe').addEventListener('click', function(){ byId('file-classe').click(); });
