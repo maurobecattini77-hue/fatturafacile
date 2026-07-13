@@ -1330,9 +1330,11 @@
   }
   // Export dei COMPITI A CASA: come l'export verifiche, ma prende TUTTI i compiti consegnati (modalita='compiti'),
   // senza il vincolo dell'assegnazione (nei compiti l'alunno sceglie da sé quali fare).
-  function esportaCompitiHTML(){
+  function esportaCompitiHTML(classe){
     if(!SB){ showAlert('Cloud non disponibile.'); return; }
-    SB.from('fatt_tentativi').select('pin,fattura_id,risposte,created_at').eq('modalita', 'compiti').eq('completato', true).order('created_at', {ascending:true}).then(function(res){
+    var q = SB.from('fatt_tentativi').select('pin,fattura_id,risposte,created_at').eq('modalita', 'compiti').eq('completato', true);
+    if(classe && classe !== '—') q = q.eq('classe', classe);
+    q.order('created_at', {ascending:true}).then(function(res){
       var rows = (res && res.data) ? res.data : [];
       if(!rows.length){ showAlert('Nessun compito da esportare.'); return; }
       var byPin = {};
@@ -1345,7 +1347,7 @@
         data.push({ pin:pin, nome:s.nome, cognome:s.cognome, nums:fatture.map(function(f){ return f.num; }).join(' · '), fatture:fatture });
       });
       data.sort(function(a,b){ return (a.cognome||a.nome).localeCompare((b.cognome||b.nome), 'it'); });
-      buildExportDoc(data, (CLASSE&&CLASSE.classe)||'', 'Compiti a casa', 'compiti');
+      buildExportDoc(data, (classe && classe !== '—') ? classe : ((CLASSE&&CLASSE.classe)||''), 'Compiti a casa', 'compiti');
     }, function(){ showAlert('Errore nel recupero dei compiti.'); });
   }
   function backupClasse(){
@@ -3184,31 +3186,67 @@
 
   /* ===================== ARCHIVIO COMPITI A CASA (lato docente) ===================== */
   // Elenco nomi → fatture consegnate → soluzione a confronto. Riusa la schermata "menu-fatture" e le viste soluzione.
+  var ARCH_FOLDERS_SVG = '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#534ab7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px; margin-right:9px;"><path d="M9 4h3l2 2h5a2 2 0 0 1 2 2v7a2 2 0 0 1 -2 2h-9a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2"/><path d="M17 17v2a2 2 0 0 1 -2 2h-9a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2h2"/></svg>';
   function apriArchivioCompiti(){
     if(!SB){ showAlert('Cloud non disponibile.'); return; }
     var carica = function(){
-      SB.from('fatt_tentativi').select('pin,fattura_id,risposte,created_at').eq('modalita', 'compiti').eq('completato', true).order('created_at', {ascending:true}).then(function(res){
+      SB.from('fatt_tentativi').select('pin,classe,fattura_id,risposte,created_at').eq('modalita', 'compiti').eq('completato', true).order('created_at', {ascending:true}).then(function(res){
         var rows = (res && res.data) || [];
-        var byPin = {};
+        var byClasse = {};
         rows.forEach(function(r){
           var rr = r.risposte || {};
-          if(!byPin[r.pin]) byPin[r.pin] = { pin:r.pin, nome:(rr.nome || r.pin), items:{} };
-          byPin[r.pin].items[r.fattura_id] = { fattura_id:r.fattura_id, titolo:(rr.titolo || r.fattura_id), risposte:rr }; // tiene l'ultima consegna per fattura
+          var cl = r.classe || '—';
+          if(!byClasse[cl]) byClasse[cl] = { classe:cl, byPin:{} };
+          var bp = byClasse[cl].byPin;
+          if(!bp[r.pin]) bp[r.pin] = { pin:r.pin, nome:(rr.nome || r.pin), items:{} };
+          bp[r.pin].items[r.fattura_id] = { fattura_id:r.fattura_id, titolo:(rr.titolo || r.fattura_id), risposte:rr };
         });
-        STATE.archivioCompiti = byPin;
-        renderArchivioNomi();
+        STATE.archivioClassi = byClasse;
+        var classi = Object.keys(byClasse);
+        // Adattivo: una sola classe → dritto ai nomi; più classi → prima le cartelle-classe.
+        if(classi.length <= 1){ STATE.archivioClasseSel = classi[0] || null; renderArchivioNomi(); }
+        else { renderArchivioClassi(); }
       }, function(){ showAlert('Errore nella lettura dell\'archivio compiti.'); });
     };
     if(typeof FATTURE==='undefined' || !FATTURE || !FATTURE.length){ cloudCaricaContesto(function(){ carica(); }); }
     else carica();
   }
-  function renderArchivioNomi(){
-    STATE.archivioMode = true; STATE.modalitaCompiti = false; STATE.solExitFn = null;
+  // Livello CARTELLE-CLASSE (mostrato solo con più classi).
+  function renderArchivioClassi(){
+    STATE.archivioMode = true; STATE.modalitaCompiti = false; STATE.solExitFn = null; STATE.archivioClasseSel = null;
     STATE.menuBackFn = function(){ tornaDashboardDaArchivio(); };
     byId('menu-fatture').classList.add('arch5');
-    var byPin = STATE.archivioCompiti || {};
+    byId('menu-title').innerHTML = ARCH_FOLDERS_SVG + 'Archivio compiti a casa';
+    var classi = Object.keys(STATE.archivioClassi || {}).sort(function(a, b){ return a.localeCompare(b, 'it'); });
+    byId('menu-sub').textContent = 'Scegli una classe per vedere i compiti consegnati.';
+    var list = byId('menu-list'); list.innerHTML = '';
+    var folderSmall = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h3l2 2h5a2 2 0 0 1 2 2v7a2 2 0 0 1 -2 2h-9a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2"/><path d="M17 17v2a2 2 0 0 1 -2 2h-9a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2h2"/></svg>';
+    classi.forEach(function(cl){
+      var c = STATE.archivioClassi[cl];
+      var nAl = Object.keys(c.byPin).length, nFat = 0;
+      Object.keys(c.byPin).forEach(function(p){ nFat += Object.keys(c.byPin[p].items).length; });
+      var row = document.createElement('div'); row.className = 'arch-row';
+      var av = document.createElement('div'); av.className = 'arch-av'; av.innerHTML = folderSmall;
+      var info = document.createElement('div'); info.className = 'arch-info';
+      var t = document.createElement('div'); t.className = 'arch-nm'; t.textContent = (cl === '—' ? 'Senza classe' : 'Classe ' + cl);
+      var sub = document.createElement('div'); sub.className = 'arch-mt'; sub.textContent = nAl + (nAl===1?' alunno · ':' alunni · ') + nFat + (nFat===1?' fattura':' fatture');
+      info.appendChild(t); info.appendChild(sub);
+      var b = document.createElement('button'); b.className = 'arch-apri'; b.textContent = 'Apri'; b.addEventListener('click', function(){ renderArchivioNomi(cl); });
+      row.appendChild(av); row.appendChild(info); row.appendChild(b); list.appendChild(row);
+    });
+    var esci = byId('btn-esci-menu'); if(esci) esci.textContent = '← Torna alla dashboard';
+    show('menu-fatture');
+  }
+  function renderArchivioNomi(classe){
+    var cl = (classe != null) ? classe : STATE.archivioClasseSel;
+    STATE.archivioClasseSel = cl;
+    var multiClasse = Object.keys(STATE.archivioClassi || {}).length > 1;
+    var byPin = ((STATE.archivioClassi || {})[cl] || { byPin:{} }).byPin;
+    STATE.archivioMode = true; STATE.modalitaCompiti = false; STATE.solExitFn = null;
+    STATE.menuBackFn = function(){ if(multiClasse){ renderArchivioClassi(); } else { tornaDashboardDaArchivio(); } };
+    byId('menu-fatture').classList.add('arch5');
     var pins = Object.keys(byPin).sort(function(a, b){ return (byPin[a].nome || '').localeCompare(byPin[b].nome || '', 'it'); });
-    byId('menu-title').innerHTML = '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#534ab7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px; margin-right:9px;"><path d="M9 4h3l2 2h5a2 2 0 0 1 2 2v7a2 2 0 0 1 -2 2h-9a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2"/><path d="M17 17v2a2 2 0 0 1 -2 2h-9a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2h2"/></svg>Archivio compiti a casa';
+    byId('menu-title').innerHTML = ARCH_FOLDERS_SVG + 'Compiti a casa' + (cl && cl !== '—' ? ' · Classe ' + esc(cl) : '');
     byId('menu-sub').textContent = pins.length
       ? ('Alunni che hanno consegnato compiti: ' + pins.length + '. Clicca un nome per vedere le sue fatture e le soluzioni.')
       : 'Ancora nessun compito consegnato.';
@@ -3230,21 +3268,24 @@
       var azioni = document.createElement('div'); azioni.style.cssText = 'margin-top:18px; display:flex; gap:12px; flex-wrap:wrap; justify-content:center;';
       var icoDl = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px;"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"/><path d="M7 11l5 5l5 -5"/><path d="M12 4l0 12"/></svg>';
       var icoTr = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px;"><path d="M4 7l16 0"/><path d="M10 11l0 6"/><path d="M14 11l0 6"/><path d="M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12"/><path d="M9 7v-3a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v3"/></svg>';
-      var exp = document.createElement('button'); exp.innerHTML = icoDl + 'Esporta archivio';
+      var etichetta = (cl && cl !== '—') ? (' (classe ' + cl + ')') : '';
+      var exp = document.createElement('button'); exp.innerHTML = icoDl + 'Esporta archivio' + etichetta;
       exp.style.cssText = 'display:inline-flex; align-items:center; background:#eef3fb; border:1px solid #cddcf0; color:#254a86; border-radius:9px; padding:10px 18px; font-size:14px; line-height:16px; cursor:pointer;';
-      exp.addEventListener('click', esportaCompitiHTML);
-      var svu = document.createElement('button'); svu.innerHTML = icoTr + 'Svuota archivio compiti';
+      exp.addEventListener('click', function(){ esportaCompitiHTML(cl); });
+      var svu = document.createElement('button'); svu.innerHTML = icoTr + 'Svuota' + etichetta;
       svu.style.cssText = 'display:inline-flex; align-items:center; background:#fdece9; border:1px solid #f1c9c3; color:#b4472f; border-radius:9px; padding:10px 18px; font-size:14px; line-height:16px; cursor:pointer;';
-      svu.addEventListener('click', svuotaArchivioCompiti);
+      svu.addEventListener('click', function(){ svuotaArchivioCompiti(cl); });
       azioni.appendChild(exp); azioni.appendChild(svu); list.appendChild(azioni);
     }
-    var esci = byId('btn-esci-menu'); if(esci) esci.textContent = '← Torna alla dashboard';
+    var esci = byId('btn-esci-menu'); if(esci) esci.textContent = multiClasse ? '← Torna alle classi' : '← Torna alla dashboard';
     show('menu-fatture');
   }
   function renderArchivioFatture(pin){
-    STATE.menuBackFn = function(){ renderArchivioNomi(); };
+    var cl = STATE.archivioClasseSel;
+    var byPin = ((STATE.archivioClassi || {})[cl] || { byPin:{} }).byPin;
+    var s = byPin[pin]; if(!s){ renderArchivioNomi(cl); return; }
+    STATE.menuBackFn = function(){ renderArchivioNomi(cl); };
     byId('menu-fatture').classList.add('arch5');
-    var s = (STATE.archivioCompiti || {})[pin]; if(!s){ renderArchivioNomi(); return; }
     byId('menu-title').textContent = s.nome;
     byId('menu-sub').textContent = 'Fatture consegnate come compiti. Clicca per vedere la soluzione a confronto.';
     var ids = Object.keys(s.items).sort(function(a, b){ return (parseInt(numeroFattura(a), 10) || 0) - (parseInt(numeroFattura(b), 10) || 0); });
@@ -3263,7 +3304,9 @@
     show('menu-fatture');
   }
   function apriSoluzioneArchivio(pin, fatturaId){
-    var s = (STATE.archivioCompiti || {})[pin]; if(!s || !s.items[fatturaId]) return;
+    var cl = STATE.archivioClasseSel;
+    var byPin = ((STATE.archivioClassi || {})[cl] || { byPin:{} }).byPin;
+    var s = byPin[pin]; if(!s || !s.items[fatturaId]) return;
     var r = s.items[fatturaId].risposte || {};
     var f = (FATTURE || []).find(function(x){ return x.id === fatturaId; });
     STATE.assegnataId = fatturaId;
@@ -3281,10 +3324,15 @@
     var esci = byId('btn-esci-menu'); if(esci) esci.textContent = 'Esci';
     show('docente'); renderDocente();
   }
-  function svuotaArchivioCompiti(){
+  function svuotaArchivioCompiti(classe){
     if(!SB) return;
-    showConfirm('Vuoi svuotare TUTTO l\'archivio dei compiti a casa? I compiti consegnati dai ragazzi verranno cancellati definitivamente. (Non tocca le verifiche.)', function(){
-      try{ SB.from('fatt_tentativi').delete().eq('modalita', 'compiti').gte('created_at', '2000-01-01').then(function(){ STATE.archivioCompiti = {}; renderArchivioNomi(); showAlert('Archivio compiti svuotato.'); }, function(){ showAlert('Errore durante lo svuotamento.'); }); }catch(e){ showAlert('Errore: ' + e.message); }
+    var scope = (classe && classe !== '—') ? (' della classe ' + classe) : '';
+    showConfirm('Vuoi svuotare l\'archivio dei compiti a casa' + scope + '? I compiti consegnati verranno cancellati definitivamente. (Non tocca le verifiche.)', function(){
+      try{
+        var q = SB.from('fatt_tentativi').delete().eq('modalita', 'compiti');
+        if(classe && classe !== '—') q = q.eq('classe', classe); else q = q.gte('created_at', '2000-01-01');
+        q.then(function(){ showAlert('Archivio compiti svuotato' + scope + '.'); apriArchivioCompiti(); }, function(){ showAlert('Errore durante lo svuotamento.'); });
+      }catch(e){ showAlert('Errore: ' + e.message); }
     });
   }
   byId('btn-entra-alunno').addEventListener('click', function(){
