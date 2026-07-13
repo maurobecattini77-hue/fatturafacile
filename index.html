@@ -223,6 +223,14 @@
   /* ---- Scheda VALUTAZIONE (verifiche): righe larghe, riepilogo centrato ---- */
   .lnk-valuta{ color:#254a86; font-size:13px; cursor:pointer; }
   .lnk-valuta:hover{ text-decoration:underline; }
+  .btn-pubblica{ display:inline-flex; align-items:center; border:none; background:#5c8b73; color:#fff; border-radius:8px; padding:10px 16px; font-family:inherit; font-size:14px; font-weight:600; cursor:pointer; }
+  .btn-pubblica:hover{ background:#3f6b52; }
+  /* Banner "valutazione pubblicata" nella pagina compiti dell'alunno */
+  .val-card{ display:flex; align-items:center; gap:14px; background:#eef3fb; border:1px solid #cddcf0; border-radius:12px; padding:14px 18px; margin:0 0 16px; cursor:pointer; }
+  .val-card:hover{ background:#e4edf9; }
+  .val-card .vc-voto{ font-size:30px; font-weight:600; color:#254a86; line-height:1; }
+  .val-card .vc-txt-t{ font-weight:500; color:#254a86; }
+  .val-card .vc-txt-s{ font-size:13px; color:#5b6b82; }
   .vv-sum{ display:flex; background:#eef3fb; border:1px solid #cddcf0; border-radius:12px; padding:16px 18px; margin-bottom:14px; }
   .vv-col{ flex:1; text-align:center; }
   .vv-lab{ font-size:12px; color:#5b6b82; margin-bottom:5px; }
@@ -450,6 +458,7 @@
     <input type="file" id="file-verifica" accept=".json,application/json" style="display:none;" />
     <button class="btn-consegna" id="btn-consegna-classe"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:7px;"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4z"/></svg>Consegna classe</button>
     <button class="btn-ghost" id="btn-esporta-html">Esporta HTML</button>
+    <button class="btn-pubblica" id="btn-pubblica-voti"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:7px;"><path d="M3 11l18 -5v12l-18 -5v-2z"/><path d="M11.6 16.8a3 3 0 1 1 -5.8 -1.6"/></svg>Pubblica voti</button>
     <button class="btn-archivio" id="btn-archivio-compiti"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#3C3489" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:7px;"><path d="M9 4h3l2 2h5a2 2 0 0 1 2 2v7a2 2 0 0 1 -2 2h-9a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2"/><path d="M17 17v2a2 2 0 0 1 -2 2h-9a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2h2"/></svg>Archivio compiti</button>
     <button class="btn-ghost" id="btn-backup">Backup</button>
     <button class="btn-ghost" id="btn-ripristina">Ripristina</button>
@@ -3181,7 +3190,7 @@
     }
     var row = document.createElement('div'); row.className = 'vc-row';
     var tabs = document.createElement('div'); tabs.className = 'vc-tabs';
-    var nTabs = (VC.mode === 'valuta') ? 5 : 4;
+    var nTabs = (VC.mode === 'valuta' || VC.mode === 'alunno-valuta') ? 5 : 4;
     for(var i = 0; i < nTabs; i++){ (function(i){
       var b = document.createElement('button'); b.type = 'button'; b.className = 'vc-tab' + (i === VC.ct ? ' active' : '');
       b.textContent = vcLabel(i); b.addEventListener('click', function(){ VC.ct = i; vcGo(); }); tabs.appendChild(b);
@@ -3267,7 +3276,22 @@
   }
   function vcRenderValutazione(){
     var host = byId('valuta-body'); if(!host) return;
-    var val = VC.val || {}; var saved = {};
+    var val = VC.val || {};
+    if(VC.mode === 'alunno-valuta'){   // SOLA LETTURA per l'alunno
+      var items = val.items || [];
+      var roHtml = items.map(function(s){
+        var voto = (s.voto != null ? vvFmt(s.voto) : '—');
+        var max = (s.max != null ? vvFmt(s.max) : '—');
+        var giud = s.giudizio || '';
+        return '<div class="vv-row"><div class="vv-left"><div class="vv-fh">Fattura ' + esc(String(s.num)) + '</div>'
+          + '<div style="font-size:22px; color:#254a86; font-weight:600;">' + esc(voto) + ' <span style="color:#8a94a6; font-size:15px;">/ ' + esc(max) + '</span></div></div>'
+          + '<div class="vv-ta" style="min-height:auto; white-space:pre-wrap; background:#f9fafb;">' + (giud ? esc(giud) : '<span style="color:#8a94a6;">Nessun commento.</span>') + '</div></div>';
+      }).join('');
+      host.innerHTML = '<div class="vv-sum">' + vvSummaryHtml(val) + '</div><div class="vv-rows">' + roHtml + '</div>';
+      var bar0 = byId('valuta-bar'); if(bar0){ bar0.innerHTML = ''; bar0.appendChild(vcBarNode()); }
+      show('valuta-view'); return;
+    }
+    var saved = {};
     (val.items || []).forEach(function(it){ saved[it.fattura_id != null ? it.fattura_id : it.num] = it; });
     var rowsHtml = VC.fatture.map(function(f, i){
       var s = saved[f.id != null ? f.id : f.num] || {};
@@ -3296,7 +3320,11 @@
     v.data = new Date().toISOString();
     v.nome = VC.nome || '';
     VC.val = v;
-    if(SB && VC.pin){ try{ SB.from('fatt_studenti').update({ valutazione:v }).eq('pin', VC.pin).then(function(){}, function(){}); }catch(e){} }
+    var upd = { valutazione:v };
+    // Istantanea dei lavori dell'alunno: serve alla vista alunno DOPO il Reset (che cancella le consegne verifica).
+    var hasHtml = (VC.fatture || []).some(function(f){ return f.cortesiaAlunno || f.dashboardAlunno || f.cortesiaCorretta || f.dashboardCorretta; });
+    if(hasHtml){ upd.valutazione_snapshot = { fatture: VC.fatture.map(function(f){ return { id:f.id, num:f.num, nonSvolta:!!f.nonSvolta, cortesiaAlunno:f.cortesiaAlunno || '', cortesiaCorretta:f.cortesiaCorretta || '', dashboardAlunno:f.dashboardAlunno || '', dashboardCorretta:f.dashboardCorretta || '' }; }) }; }
+    if(SB && VC.pin){ try{ SB.from('fatt_studenti').update(upd).eq('pin', VC.pin).then(function(){}, function(){}); }catch(e){} }
     if(VC.pin){ if(!CLOUD_STUD[VC.pin]) CLOUD_STUD[VC.pin] = { pin:VC.pin }; CLOUD_STUD[VC.pin].valutazione = v; }
     var s = byId('vv-sum'); if(s) s.innerHTML = vvSummaryHtml(v);
     showAlert('Valutazione salvata per ' + (VC.nome || 'l\'alunno') + (v.voto_finale ? (' — voto ' + v.voto_finale) : '') + '. La ritrovi in dashboard.');
@@ -3317,6 +3345,35 @@
       var val = (CLOUD_STUD[a.pin] || {}).valutazione || null;
       mostraViewerCompiti({ pin:a.pin, nome:(a.cognome + ' ' + a.nome).trim(), cognome:(a.cognome || ''), valutazione:val, cf:0, fatture:fatture }, 'valuta', function(){ show('docente'); renderDocente(); });
     }, function(){ showAlert('Errore nel caricamento delle consegne di ' + a.nome + '.'); });
+  }
+  function fmtDataIt(iso){ try{ var d = new Date(iso); if(isNaN(d.getTime())) return ''; function p(n){ return (n < 10 ? '0' : '') + n; } return p(d.getDate()) + '/' + p(d.getMonth() + 1) + '/' + d.getFullYear(); }catch(e){ return ''; } }
+  function cloudLeggiValutazione(pin, cb){
+    if(!SB || !pin){ cb && cb(null, null); return; }
+    try{ SB.from('fatt_studenti').select('valutazione,valutazione_snapshot').eq('pin', pin).maybeSingle().then(function(res){ var d = (res && res.data) ? res.data : null; cb && cb(d ? d.valutazione : null, d ? d.valutazione_snapshot : null); }, function(){ cb && cb(null, null); }); }catch(e){ cb && cb(null, null); }
+  }
+  // Vista ALUNNO della propria valutazione (sola lettura), aperta dalla card nella pagina compiti.
+  function apriValutazioneAlunno(val, snap, exitFn){
+    var fatture = (snap && Array.isArray(snap.fatture) && snap.fatture.length)
+      ? snap.fatture.map(function(f){ return { id:f.id, num:f.num, nonSvolta:!!f.nonSvolta, cortesiaAlunno:f.cortesiaAlunno || '', cortesiaCorretta:f.cortesiaCorretta || '', dashboardAlunno:f.dashboardAlunno || '', dashboardCorretta:f.dashboardCorretta || '' }; })
+      : (val.items || []).map(function(it){ return { id:it.fattura_id, num:it.num, nonSvolta:false, cortesiaAlunno:'', cortesiaCorretta:'', dashboardAlunno:'', dashboardCorretta:'' }; });
+    mostraViewerCompiti({ pin:(STATE.studente ? STATE.studente.pin : ''), nome:(val.nome || ''), cognome:(STATE.studente ? (STATE.studente.cognome || '') : ''), valutazione:val, cf:0, fatture:fatture }, 'alunno-valuta', exitFn);
+    VC.ct = 4; vcGo();
+  }
+  // Pubblica i voti della CLASSE ATTIVA: gli alunni li vedono entrando col PIN (in modalità compiti).
+  function pubblicaVoti(){
+    var cl = (CLASSE && CLASSE.classe) || STATE.classeAttiva || '';
+    if(!cl){ showAlert('Nessuna classe selezionata.'); return; }
+    var targets = (CLASSE && CLASSE.alunni ? CLASSE.alunni : []).filter(function(a){ var v = (CLOUD_STUD[a.pin] || {}).valutazione; return v && v.voto_finale; });
+    if(!targets.length){ showAlert('Nessuna valutazione da pubblicare nella classe ' + cl + '. Valuta prima gli alunni.'); return; }
+    var giaP = targets.filter(function(a){ return (CLOUD_STUD[a.pin] || {}).valutazione.pubblicata; }).length;
+    showConfirm('Pubblicare i voti della classe ' + cl + '? ' + targets.length + (targets.length === 1 ? ' alunno valutato' : ' alunni valutati') + ' li vedranno entrando col PIN.' + (giaP ? (' (' + giaP + ' già pubblicati)') : ''), function(){
+      targets.forEach(function(a){
+        var v = CLOUD_STUD[a.pin].valutazione; v.pubblicata = true;
+        if(SB){ try{ SB.from('fatt_studenti').update({ valutazione:v }).eq('pin', a.pin).then(function(){}, function(){}); }catch(e){} }
+      });
+      renderDocente();
+      showAlert('Voti pubblicati per la classe ' + cl + ': ' + targets.length + (targets.length === 1 ? ' alunno.' : ' alunni. Entrando col PIN, ora vedono la loro valutazione.'));
+    });
   }
 
   /* =========================================================
@@ -3427,6 +3484,19 @@
       row.appendChild(num); row.appendChild(info); row.appendChild(cta); list.appendChild(row);
     });
     byId('menu-sub').textContent = 'Scegli una fattura, compilala e consegnala al prof. Dopo la consegna vedrai (e potrai stampare) la soluzione. Ogni fattura si compila una volta sola. (Fatte ' + fatti + ' su ' + tot + ')';
+    // Se il docente ha PUBBLICATO la valutazione della verifica, mostra una card in cima (cliccabile).
+    var pin0 = STATE.studente ? STATE.studente.pin : '';
+    if(pin0){ cloudLeggiValutazione(pin0, function(val, snap){
+      if(!val || !val.pubblicata || !val.voto_finale) return;
+      if(!byId('menu-fatture') || byId('menu-fatture').style.display === 'none') return;
+      var card = document.createElement('div'); card.className = 'val-card';
+      var dt = fmtDataIt(val.data);
+      card.innerHTML = '<div class="vc-voto">' + esc(String(val.voto_finale)) + '</div>'
+        + '<div><div class="vc-txt-t">Valutazione verifica' + (dt ? (' del ' + dt) : '') + '</div><div class="vc-txt-s">Tocca per vedere il dettaglio (fatture e giudizi)</div></div>'
+        + '<div style="margin-left:auto; color:#254a86; font-size:22px;">&rsaquo;</div>';
+      card.addEventListener('click', function(){ apriValutazioneAlunno(val, snap, function(){ renderCompitiPicker(); show('menu-fatture'); }); });
+      var list = byId('menu-list'); if(list) list.insertBefore(card, list.firstChild);
+    }); }
   }
   function apriCompito(f){
     STATE.assegnataId = f.id; STATE.consegnata = false; STATE.solExitFn = null;
@@ -3701,6 +3771,7 @@
   byId('btn-carica-classe').addEventListener('click', function(){ byId('file-classe').click(); });
   byId('btn-carica-verifica').addEventListener('click', function(){ byId('file-verifica').click(); });
   byId('btn-esporta-html').addEventListener('click', esportaHTML);
+  byId('btn-pubblica-voti').addEventListener('click', pubblicaVoti);
   byId('btn-archivio-compiti').addEventListener('click', apriArchivioCompiti);
   byId('btn-consegna-classe').addEventListener('click', forzaConsegnaClasse);
   byId('btn-backup').addEventListener('click', backupClasse);
