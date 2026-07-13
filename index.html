@@ -645,7 +645,6 @@
     <div class="banner banner-cortesia" id="cortesia-banner"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="#254a86" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:7px;"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z"/><path d="M9 13l6 0"/><path d="M9 17l6 0"/></svg>Questa è la tua <b>fattura di cortesia</b>, con i valori che hai inserito. Controllala bene prima di consegnare.</div>
     <div class="cx-actions">
       <button class="btn-ghost" id="btnIndietro">&larr; Torna alla compilazione</button>
-      <button class="btn-green" id="btnScaricaPdf">Scarica in PDF</button>
       <button class="btn-red-solid" id="btnChiudi">Chiudi e consegna</button>
     </div>
     <div id="cortesia-page" class="cx-page"></div>
@@ -3579,7 +3578,6 @@
   byId('ver-toggle').addEventListener('click', function(){ var closed = byId('ver-body').classList.toggle('collapsed'); this.textContent = closed ? '+' : '–'; });
 
   byId('btnIndietro').addEventListener('click', function(){ show('editor'); });
-  byId('btnScaricaPdf').addEventListener('click', function(){ stampa('cortesia-view'); });
   byId('btnChiudi').addEventListener('click', function(){
     if(STATE.consegnata) return;
     if(STATE.modalitaCompiti){ consegnaCompito(); return; } // compiti a casa: consegna + mostra soluzione
