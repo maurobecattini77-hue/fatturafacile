@@ -873,16 +873,23 @@
   function startConsegnaWatcher(){
     stopConsegnaWatcher();
     if(!SB) return;
+    // Si "arma" quando vediamo l'alunno davvero al lavoro (stato NON 'consegnato'). Un login normale parte già armato;
+    // una sessione riammessa parte DISARMATA, così una 'consegnato' residua subito dopo la riammissione non ri-blocca.
+    STATE.consegnaArmed = !STATE.riammesso;
     STATE.consegnaTimer = setInterval(function(){
       if(!STATE.studente || STATE.consegnata){ return; }
       SB.from('fatt_studenti').select('stato').eq('pin', STATE.studente.pin).maybeSingle().then(function(res){
         var s = (res && res.data) ? res.data : null;
         if(!s) return;
-        // Blocca SOLO se il docente ha segnato "consegnato/da_consegnare" (stato autorevole);
-        // NON usare il flag "consegnata", che i ping di presenza fanno oscillare (causava la ri-blocco dopo Riammetti).
-        // In sessione "riammesso" NON bloccare su "consegnato" (lo rimette l'alunno stesso riconsegnando):
-        // in quel caso solo una vera consegna forzata del docente ("da_consegnare") deve bloccare.
-        if((s.stato === 'da_consegnare' || (s.stato === 'consegnato' && !STATE.riammesso)) && !STATE.consegnata){ bloccaPerConsegnaDocente(); }
+        var st = s.stato || 'non_iniziato';
+        // Consegna forzata "in corso" del docente: blocca sempre.
+        if(st === 'da_consegnare'){ if(!STATE.consegnata) bloccaPerConsegnaDocente(); return; }
+        // Consegna forzata conclusa ('consegnato'): blocca solo se eravamo "armati" (l'alunno stava lavorando).
+        // Così la forzata funziona SEMPRE, anche DOPO una riammissione e più volte; mentre una 'consegnato'
+        // residua subito dopo la riammissione (prima che parta il lavoro) NON ri-blocca per sbaglio.
+        if(st === 'consegnato'){ if(STATE.consegnaArmed && !STATE.consegnata) bloccaPerConsegnaDocente(); return; }
+        // Stato di lavoro (in_corso / non_iniziato / bloccato): l'alunno è attivo → arma il blocco.
+        STATE.consegnaArmed = true;
       }, function(){});
     }, 2500);
   }
@@ -1052,6 +1059,7 @@
     STATE.riammConsumando = true;
     STATE.riammesso = true;
     STATE.consegnata = false;
+    STATE.consegnaArmed = false; // si riarma quando il watcher vede l'alunno di nuovo al lavoro (evita ri-blocco su 'consegnato' residuo)
     // Consuma il flag lato cloud e riporta lo stato "in corso".
     try{ if(SB) SB.from('fatt_studenti').update({ riammesso:false, stato:'in_corso', consegnata:false }).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
     // Le consegne sono state cancellate dal docente: ricostruendo dal cloud nessuna fattura risulta più consegnata.
