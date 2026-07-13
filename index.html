@@ -1475,7 +1475,7 @@
   function refreshCloudStud(cb){
     if(!SB){ cb && cb(); return; }
     try{
-      SB.from('fatt_studenti').select('pin,nome,cognome,classe,ultimo_accesso,fattura_corrente,livello_corrente,fattura_assegnata,livello_assegnato,consegnata,stato,riammesso').then(function(res){
+      SB.from('fatt_studenti').select('pin,nome,cognome,classe,ultimo_accesso,fattura_corrente,livello_corrente,fattura_assegnata,livello_assegnato,consegnata,stato,riammesso,valutazione').then(function(res){
         CLOUD_STUD = {}; ((res && res.data) || []).forEach(function(s){ CLOUD_STUD[s.pin] = s; });
         cb && cb();
       }, function(){ cb && cb(); });
