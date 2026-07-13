@@ -985,6 +985,20 @@
       CLOUD_CONS[a.pin] = {};
     });
   }
+  // Marca/smarca una CLASSE come "modalità compiti a casa" (lista in fatt_config.compiti_classi).
+  // on=true (dopo Reset classe): i suoi alunni fanno i compiti anche se il docente è collegato.
+  // on=false (dopo un'assegnazione): la classe torna in verifica.
+  function cloudSetModalitaCompiti(classe, on){
+    if(!SB || !classe) return;
+    try{
+      SB.from('fatt_config').select('compiti_classi').eq('id', 1).maybeSingle().then(function(res){
+        var arr = (res && res.data && Array.isArray(res.data.compiti_classi)) ? res.data.compiti_classi : [];
+        var set = {}; arr.forEach(function(c){ if(c) set[c] = true; });
+        if(on) set[classe] = true; else delete set[classe];
+        try{ SB.from('fatt_config').update({ compiti_classi: Object.keys(set) }).eq('id', 1).then(function(){}, function(){}); }catch(e){}
+      }, function(){});
+    }catch(e){}
+  }
   // Blocco anti-doppio-accesso: controlla se l'alunno può entrare e aggiorna lo stato.
   function cloudCheckAccesso(pin, cb){
     if(!SB){ cb && cb({ allow:true }); return; }
@@ -1452,13 +1466,16 @@
   function cloudModalitaAlunno(pin, cb){
     if(!SB){ cb && cb(null); return; }
     try{
-      SB.from('fatt_studenti').select('fattura_assegnata').eq('pin', pin).maybeSingle().then(function(r1){
+      SB.from('fatt_studenti').select('fattura_assegnata,classe').eq('pin', pin).maybeSingle().then(function(r1){
         var per = (r1 && r1.data) ? r1.data : null;
-        if(per && per.fattura_assegnata){ cb && cb(null); return; } // ha un'assegnazione personale → normale
-        SB.from('fatt_config').select('docente_heartbeat').eq('id', 1).maybeSingle().then(function(r2){
+        if(per && per.fattura_assegnata){ cb && cb(null); return; } // ha un'assegnazione personale → normale (verifica)
+        var cl = per ? per.classe : null;
+        SB.from('fatt_config').select('docente_heartbeat,compiti_classi').eq('id', 1).maybeSingle().then(function(r2){
           var cfg = (r2 && r2.data) ? r2.data : null;
+          var compitiClassi = (cfg && Array.isArray(cfg.compiti_classi)) ? cfg.compiti_classi : [];
+          if(cl && compitiClassi.indexOf(cl) !== -1){ cb && cb('compiti'); return; } // classe messa in modalità compiti dal Reset → compiti SEMPRE
           var hb = (cfg && cfg.docente_heartbeat) ? (Date.now() - new Date(cfg.docente_heartbeat).getTime()) : Infinity;
-          cb && cb((hb < 60000) ? null : 'compiti'); // docente presente → "In attesa"; assente → compiti
+          cb && cb((hb < 60000) ? null : 'compiti'); // altrimenti: docente presente → "In attesa"; assente → compiti
         }, function(){ cb && cb(null); });
       }, function(){ cb && cb(null); });
     }catch(e){ cb && cb(null); }
@@ -3382,6 +3399,7 @@
       var enc = serializeAssegnazione(list);
       // MULTI-CLASSE: assegno ai SOLI alunni della classe attiva (per-studente). Niente più valore globale condiviso.
       CLASSE.alunni.forEach(function(a){ cloudAssegnaStudente(a.pin, enc || null, list.length ? (list[0].liv || null) : null); });
+      cloudSetModalitaCompiti(CLASSE.classe, false); // assegnando, la classe esce dalla modalità compiti (torna verifica)
       try{ cloudSetAssegnazione(null, null); }catch(e){} // tengo pulito il vecchio campo globale (non più usato)
       try{ if(enc){ localStorage.setItem('ff_assegnata', enc); localStorage.setItem('ff_livello', String(list[0].liv || 2)); } else { localStorage.removeItem('ff_assegnata'); } }catch(e){}
       renderDocente();
@@ -3407,6 +3425,7 @@
     if(!cl){ showAlert('Nessuna classe selezionata da azzerare. Carica o scegli una classe.'); return; }
     showConfirm('Vuoi azzerare la classe ' + cl + '? Verranno rimosse l\'assegnazione e lo stato dei suoi alunni (comprese le verifiche consegnate). Restano il roster e i compiti a casa. Le ALTRE classi non vengono toccate.', function(){
       cloudResetClasse(cl);
+      cloudSetModalitaCompiti(cl, true); // dopo il Reset la classe passa in modalità compiti a casa
       STATE.assegnate = []; STATE.assegnataId = null;
       try{
         localStorage.removeItem('ff_assegnata'); localStorage.removeItem('ff_livello'); sessionStorage.removeItem('ff_studente_attivo');
