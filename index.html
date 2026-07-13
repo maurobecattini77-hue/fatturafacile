@@ -2558,16 +2558,17 @@
       info.appendChild(t); info.appendChild(s);
       var cta = document.createElement('div'); cta.className = 'menu-cta';
       if(fatta){
+        // Fattura CONSEGNATA: non riapribile dall'alunno (né con un pulsante, né uscendo e rientrando).
+        // L'unico modo per ritoccarla è che il DOCENTE lo riammetta (Riammetti): in quel caso la consegna
+        // viene annullata e la fattura torna "da fare" col suo lavoro dentro. Una volta riconsegnata, di nuovo chiusa.
         var d = document.createElement('span'); d.className = 'menu-done'; d.textContent = '✓ Consegnata'; cta.appendChild(d);
-        // Dopo "Riammetti": l'alunno può rientrare anche nelle fatture già consegnate per rifinirle/rivederle.
-        if(STATE.riammesso){ var rb = document.createElement('button'); rb.className = 'btn-compila'; rb.textContent = 'Rientra'; rb.style.marginLeft = '8px'; rb.addEventListener('click', function(){ apriFatturaMenu(x); }); cta.appendChild(rb); }
       }
       else { var b = document.createElement('button'); b.className = 'btn-compila'; b.textContent = 'Compila'; b.addEventListener('click', function(){ apriFatturaMenu(x); }); cta.appendChild(b); }
       row.appendChild(num); row.appendChild(info); row.appendChild(cta);
       list.appendChild(row);
     });
     byId('menu-sub').textContent = STATE.riammesso
-      ? 'Il docente ti ha riammesso: puoi rientrare in ogni fattura per rifinirla o rivederla, poi consegnarla di nuovo.'
+      ? 'Il docente ti ha riammesso: le tue fatture sono di nuovo da consegnare (ritrovi il tuo lavoro). Finiscile e consegnale di nuovo.'
       : (restanti > 0
         ? ('Scegli una fattura da compilare. Te ne ' + (restanti === 1 ? 'manca 1' : ('mancano ' + restanti)) + '.')
         : 'Hai consegnato tutte le fatture assegnate. Ottimo lavoro! Ora puoi uscire.');
