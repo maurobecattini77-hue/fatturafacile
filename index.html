@@ -221,9 +221,8 @@
   .vc-esci{ border:1px solid #cfd8e6; background:#fff; border-radius:10px; padding:8px 15px; cursor:pointer; font-size:14px; color:#254a86; font-family:inherit; }
   .vc-esci:hover{ background:#f4f7fb; }
   /* ---- Scheda VALUTAZIONE (verifiche): righe larghe, riepilogo centrato ---- */
-  .btn-valuta{ border:none; background:#254a86; color:#fff; border-radius:8px; padding:8px 16px; font-family:inherit; font-size:13px; font-weight:600; cursor:pointer; }
-  .btn-valuta:hover{ background:#1c3a6b; }
-  .btn-valuta b{ font-weight:700; }
+  .lnk-valuta{ color:#254a86; font-size:13px; cursor:pointer; }
+  .lnk-valuta:hover{ text-decoration:underline; }
   .vv-sum{ display:flex; background:#eef3fb; border:1px solid #cddcf0; border-radius:12px; padding:16px 18px; margin-bottom:14px; }
   .vv-col{ flex:1; text-align:center; }
   .vv-lab{ font-size:12px; color:#5b6b82; margin-bottom:5px; }
@@ -468,7 +467,7 @@
     <div class="tile"><div class="tile-num" id="tile-consegnati">0</div><div class="tile-lbl">Consegnati</div></div>
   </div>
   <table class="roster">
-    <thead><tr><th style="width:36px;">#</th><th style="width:230px;">Cognome e nome</th><th style="width:90px;">PIN</th><th style="width:210px;">Esercizio assegnato</th><th style="width:210px;">Stato</th><th style="width:120px;">Azioni</th><th style="width:120px;">Valuta</th></tr></thead>
+    <thead><tr><th style="width:36px;">#</th><th style="width:230px;">Cognome e nome</th><th style="width:90px;">PIN</th><th style="width:210px;">Esercizio assegnato</th><th style="width:210px;">Stato</th><th style="width:120px;">Azioni</th><th style="width:80px; text-align:center;">Voto</th><th style="width:100px; text-align:center;">Valuta</th></tr></thead>
     <tbody id="roster-body"></tbody>
   </table>
 </div>
@@ -2589,16 +2588,25 @@
     }
     return b;
   }
-  // Cella "Valuta" della dashboard: apre la scheda di valutazione del singolo alunno.
-  // Se già valutato, mostra il voto sul pulsante.
-  function buildValutaCell(a){
-    var td = document.createElement('td'); td.className = 'az-cell';
+  // Colonna VOTO: pastiglia colorata centrata (verde se sufficiente, ambra se no), '—' se non valutato.
+  function buildVotoCell(a){
+    var td = document.createElement('td'); td.style.textAlign = 'center';
     var val = (CLOUD_STUD[a.pin] || {}).valutazione;
-    var b = document.createElement('button'); b.className = 'btn-valuta';
-    if(val && val.voto_finale){ b.innerHTML = '<b>' + esc(String(val.voto_finale)) + '</b> · Valuta'; b.title = 'Voto attuale ' + val.voto_finale + '. Clicca per rivedere o modificare.'; }
-    else { b.textContent = 'Valuta'; }
-    b.addEventListener('click', function(){ apriValutazione(a); });
-    td.appendChild(b); return td;
+    if(val && val.voto_finale){
+      var suff = (val.perc != null && val.perc >= 59.1); // sufficiente = voto >= 6
+      var sp = document.createElement('span'); sp.textContent = val.voto_finale;
+      sp.style.cssText = 'display:inline-block; border-radius:20px; padding:3px 13px; font-size:14px; font-weight:600; ' + (suff ? 'background:#eaf3de; color:#3b6d11;' : 'background:#faeeda; color:#854f0b;');
+      if(val.pubblicata) sp.title = 'Voto pubblicato';
+      td.appendChild(sp);
+    } else { var d = document.createElement('span'); d.textContent = '—'; d.style.color = '#b4b2a9'; td.appendChild(d); }
+    return td;
+  }
+  // Colonna VALUTA: piccolo link centrato che apre la scheda di valutazione (anche per rivedere/cambiare).
+  function buildValutaCell(a){
+    var td = document.createElement('td'); td.style.textAlign = 'center';
+    var lnk = document.createElement('span'); lnk.className = 'lnk-valuta'; lnk.textContent = 'Valuta';
+    lnk.addEventListener('click', function(){ apriValutazione(a); });
+    td.appendChild(lnk); return td;
   }
   /* ---------- MULTI-CLASSE: elenco classi dal cloud + classe attiva ---------- */
   var CLASSES = [];
@@ -2692,7 +2700,7 @@
       var tdAz = document.createElement('td'); tdAz.className = 'az-cell';
       var wantR = wantAz(st); tdAz.setAttribute('data-az', wantR);
       var azbR = buildAzButton(wantR, a); if(azbR) tdAz.appendChild(azbR);
-      tr.appendChild(tdN); tr.appendChild(tdNome); tr.appendChild(tdPin); tr.appendChild(tdAss); tr.appendChild(tdSt); tr.appendChild(tdAz); tr.appendChild(buildValutaCell(a));
+      tr.appendChild(tdN); tr.appendChild(tdNome); tr.appendChild(tdPin); tr.appendChild(tdAss); tr.appendChild(tdSt); tr.appendChild(tdAz); tr.appendChild(buildVotoCell(a)); tr.appendChild(buildValutaCell(a));
       tb.appendChild(tr);
     });
   }
