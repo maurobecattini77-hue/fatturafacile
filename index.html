@@ -314,6 +314,7 @@
   .arch-mt{ font-size:12px; color:#6b6b82; margin-top:1px; }
   .arch-apri{ border:none; background:#534ab7; color:#fff; border-radius:8px; padding:8px 18px; font-size:13px; font-weight:600; cursor:pointer; }
   .arch-apri:hover{ background:#463da0; }
+  .sel-classe{ height:34px; border:1px solid var(--line2); border-radius:8px; padding:0 10px; font-family:inherit; font-size:14px; background:#fff; color:var(--ink); cursor:pointer; }
   .btn-consegna:hover{ filter:brightness(.96); }
   .btn-consegna-uno{ border:none; background:#f4e3a8; color:#6b5316; border-radius:8px; padding:4px 11px; font-family:inherit; font-size:12px; font-weight:700; cursor:pointer; display:inline-flex; align-items:center; }
   .btn-consegna-uno:hover{ filter:brightness(.96); }
@@ -401,6 +402,7 @@
   <div class="doc-head">
     <h1>Area docente</h1>
     <span class="pill" id="doc-classe">Nessuna classe caricata</span>
+    <select id="sel-classe" class="sel-classe" style="display:none;"></select>
   </div>
   <div class="toolbar-doc">
     <button class="btn-ghost" id="btn-carica-classe">Carica classe</button>
@@ -1423,13 +1425,8 @@
         var per = (r1 && r1.data) ? r1.data : null;
         if(per){ out.stato = per.stato || null; out.consegnata = !!per.consegnata; out.riammesso = !!per.riammesso; }
         if(per && per.fattura_assegnata){ out.fattura = assegnPrimoId(per.fattura_assegnata); out.livello = assegnPrimoLiv(per.fattura_assegnata) || per.livello_assegnato || null; out.lista = parseAssegnazione(per.fattura_assegnata); cb && cb(out); return; }
-        SB.from('fatt_config').select('assegnata_id,livello').eq('id', 1).maybeSingle().then(function(r2){
-          var cfg = (r2 && r2.data) ? r2.data : null;
-          out.fattura = cfg ? assegnPrimoId(cfg.assegnata_id) : null;
-          out.livello = cfg ? (assegnPrimoLiv(cfg.assegnata_id) || cfg.livello || null) : null;
-          out.lista = cfg ? parseAssegnazione(cfg.assegnata_id) : [];
-          cb && cb(out);
-        }, function(){ cb && cb(out); });
+        // MULTI-CLASSE: l'assegnazione è SOLO per-studente. Niente più fallback globale (sarebbe condiviso fra le classi).
+        cb && cb(out);
       }, function(){ cb && cb(out); });
     }catch(e){ cb && cb(out); }
   }
@@ -1442,11 +1439,10 @@
       SB.from('fatt_studenti').select('fattura_assegnata').eq('pin', pin).maybeSingle().then(function(r1){
         var per = (r1 && r1.data) ? r1.data : null;
         if(per && per.fattura_assegnata){ cb && cb(null); return; } // ha un'assegnazione personale → normale
-        SB.from('fatt_config').select('assegnata_id,docente_heartbeat').eq('id', 1).maybeSingle().then(function(r2){
+        SB.from('fatt_config').select('docente_heartbeat').eq('id', 1).maybeSingle().then(function(r2){
           var cfg = (r2 && r2.data) ? r2.data : null;
-          if(cfg && cfg.assegnata_id){ cb && cb(null); return; } // assegnazione di classe → normale
           var hb = (cfg && cfg.docente_heartbeat) ? (Date.now() - new Date(cfg.docente_heartbeat).getTime()) : Infinity;
-          cb && cb((hb < 60000) ? null : 'compiti'); // docente presente → normale ("In attesa"); assente → compiti
+          cb && cb((hb < 60000) ? null : 'compiti'); // docente presente → "In attesa"; assente → compiti
         }, function(){ cb && cb(null); });
       }, function(){ cb && cb(null); });
     }catch(e){ cb && cb(null); }
@@ -2506,7 +2502,53 @@
     }
     return b;
   }
+  /* ---------- MULTI-CLASSE: elenco classi dal cloud + classe attiva ---------- */
+  var CLASSES = [];
+  function buildClassiDaCloud(){
+    var m = {};
+    Object.keys(CLOUD_STUD || {}).forEach(function(pin){
+      var s = CLOUD_STUD[pin]; var c = (s && s.classe) ? s.classe : '';
+      if(!c) return;
+      if(!m[c]) m[c] = { classe:c, alunni:[] };
+      m[c].alunni.push({ pin:s.pin, nome:s.nome||'', cognome:s.cognome||'' });
+    });
+    CLASSES = Object.keys(m).sort(function(a, b){ return a.localeCompare(b, 'it'); }).map(function(c){
+      m[c].alunni.sort(function(a, b){ return ((a.cognome||'') + ' ' + (a.nome||'')).localeCompare((b.cognome||'') + ' ' + (b.nome||''), 'it'); });
+      return m[c];
+    });
+    return CLASSES;
+  }
+  function setClasseAttiva(nome){
+    var c = CLASSES.find(function(x){ return x.classe === nome; });
+    if(c){ CLASSE = c; STATE.classeAttiva = nome; try{ localStorage.setItem('ff_classe', JSON.stringify(c)); }catch(e){} renderDocente(); }
+  }
+  function renderSelClasse(){
+    var sel = byId('sel-classe'); if(!sel) return;
+    if(CLASSES.length < 2){ sel.style.display = 'none'; sel.innerHTML = ''; return; }
+    sel.style.display = '';
+    sel.innerHTML = CLASSES.map(function(c){ return '<option value="' + esc(c.classe) + '">Classe ' + esc(c.classe) + ' · ' + c.alunni.length + ' alunni</option>'; }).join('');
+    sel.value = (CLASSE && CLASSE.classe) || CLASSES[0].classe;
+    sel.onchange = function(){ setClasseAttiva(sel.value); };
+  }
   function renderDocente(){
+    // Aggiorna l'elenco classi dal cloud e assicura una "classe attiva" coerente.
+    buildClassiDaCloud();
+    if(CLASSES.length){
+      var cur = CLASSE && CLASSES.find(function(x){ return x.classe === CLASSE.classe; });
+      if(cur){ CLASSE = cur; STATE.classeAttiva = cur.classe; }
+      else {
+        var pref = STATE.classeAttiva || (CLASSE && CLASSE.classe);
+        var chosen = CLASSES.find(function(x){ return x.classe === pref; }) || CLASSES[0];
+        CLASSE = chosen; STATE.classeAttiva = chosen.classe;
+      }
+    }
+    renderSelClasse();
+    // Assegnazione corrente della classe attiva (dai suoi alunni): serve a pre-selezionare "Scegli fatture".
+    if(CLASSE && CLASSE.alunni){
+      var anyAss = null;
+      CLASSE.alunni.forEach(function(a){ var cs = CLOUD_STUD[a.pin]; if(!anyAss && cs && cs.fattura_assegnata) anyAss = cs.fattura_assegnata; });
+      STATE.assegnate = parseAssegnazione(anyAss); STATE.assegnataId = assegnPrimoId(anyAss);
+    }
     var hasClasse = !!(CLASSE && CLASSE.alunni && CLASSE.alunni.length);
     byId('doc-classe').textContent = hasClasse ? ('Classe ' + CLASSE.classe + ' · ' + CLASSE.alunni.length + ' alunni') : 'Nessuna classe caricata';
     // (riepilogo di classe e livello predefinito rimossi: l'assegnazione si vede nelle righe alunno)
@@ -3271,20 +3313,20 @@
 
   byId('btn-scegli-fatture').addEventListener('click', function(){
     if(!FATTURE.length){ showAlert('Carica prima le esercitazioni con «Carica esercitazioni».'); return; }
-    openSelezioneFatture(STATE.assegnate || [], 'Assegna a tutta la classe ' + (CLASSE ? CLASSE.classe : ''), function(list){
+    if(!(CLASSE && CLASSE.alunni && CLASSE.alunni.length)){ showAlert('Carica o seleziona prima una classe.'); return; }
+    openSelezioneFatture(STATE.assegnate || [], 'Assegna a tutta la classe ' + CLASSE.classe, function(list){
       STATE.assegnate = list;
       STATE.assegnataId = list.length ? list[0].id : null;
       var enc = serializeAssegnazione(list);
-      try{
-        if(enc){ localStorage.setItem('ff_assegnata', enc); } else { localStorage.removeItem('ff_assegnata'); }
-        if(list.length){ localStorage.setItem('ff_livello', String(list[0].liv || 2)); }
-      }catch(e){}
-      cloudSetAssegnazione(enc || null, list.length ? (list[0].liv || null) : null);
+      // MULTI-CLASSE: assegno ai SOLI alunni della classe attiva (per-studente). Niente più valore globale condiviso.
+      CLASSE.alunni.forEach(function(a){ cloudAssegnaStudente(a.pin, enc || null, list.length ? (list[0].liv || null) : null); });
+      try{ cloudSetAssegnazione(null, null); }catch(e){} // tengo pulito il vecchio campo globale (non più usato)
+      try{ if(enc){ localStorage.setItem('ff_assegnata', enc); localStorage.setItem('ff_livello', String(list[0].liv || 2)); } else { localStorage.removeItem('ff_assegnata'); } }catch(e){}
       renderDocente();
       if(list.length){
-        showAlert('Assegnat' + (list.length>1?'e ':'a ') + list.length + ' fattur' + (list.length>1?'e':'a') + ' a tutta la classe ' + (CLASSE?CLASSE.classe:'') + ':  ' + descriviAssegnazione(list));
+        showAlert('Assegnat' + (list.length>1?'e ':'a ') + list.length + ' fattur' + (list.length>1?'e':'a') + ' a tutta la classe ' + CLASSE.classe + ':  ' + descriviAssegnazione(list));
       } else {
-        showAlert('Assegnazione di classe rimossa. Chi ha già iniziato continua la sua.');
+        showAlert('Assegnazione della classe ' + CLASSE.classe + ' rimossa.');
       }
     });
   });
@@ -3321,8 +3363,13 @@
   byId('file-ripristina').addEventListener('change', function(){ leggiFile(this, function(j){ ripristinaClasse(j); }); });
   byId('file-classe').addEventListener('change', function(){ leggiFile(this, function(j){
     if(!j || !Array.isArray(j.alunni)){ showAlert('Formato classe non riconosciuto: manca l\'elenco "alunni".'); return; }
-    CLASSE = j; try{ localStorage.setItem('ff_classe', JSON.stringify(j)); }catch(e){} cloudUpsertClasse(j); renderDocente();
-    showAlert('Classe "' + (j.classe||'—') + '" caricata: ' + j.alunni.length + ' alunni.');
+    cloudUpsertClasse(j);
+    // Seed immediato di CLOUD_STUD (l'upsert è asincrono): la nuova classe compare subito nella tendina, senza sostituire le altre.
+    j.alunni.forEach(function(a){ if(!a.pin) return; if(!CLOUD_STUD[a.pin]) CLOUD_STUD[a.pin] = { pin:a.pin, stato:'non_iniziato' }; CLOUD_STUD[a.pin].nome = a.nome; CLOUD_STUD[a.pin].cognome = a.cognome; CLOUD_STUD[a.pin].classe = j.classe || ''; });
+    STATE.classeAttiva = j.classe || '';
+    CLASSE = j; try{ localStorage.setItem('ff_classe', JSON.stringify(j)); }catch(e){}
+    renderDocente();
+    showAlert('Classe "' + (j.classe||'—') + '" caricata: ' + j.alunni.length + ' alunni. Se hai più classi, passi dall\'una all\'altra con la tendina in alto.');
   }); });
   byId('file-verifica').addEventListener('change', function(){ leggiFile(this, function(j){
     if(!j || !Array.isArray(j.fatture)){ showAlert('Formato archivio non riconosciuto: manca l\'elenco "fatture".'); return; }
