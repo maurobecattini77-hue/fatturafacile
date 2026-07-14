@@ -909,7 +909,9 @@
   try{ if(window.supabase){ SB = window.supabase.createClient('https://zwuutlrafdmfqexbnohc.supabase.co', 'sb_publishable_6oCmDuDh_8ibf-p4ZAcfZg_muXXuO8N'); } }catch(e){}
   function cloudUpsertClasse(j){
     if(!SB || !j || !Array.isArray(j.alunni)) return;
-    var rows = j.alunni.map(function(a){ return { pin:a.pin, nome:a.nome, cognome:a.cognome, classe:j.classe||'' }; });
+    // Ricaricare una classe = foglio bianco: azzero anche stato e valutazioni, così il vecchio
+    // voto/verifica non resta appiccicato dopo un Reset. È l'atto con cui riparte una nuova verifica.
+    var rows = j.alunni.map(function(a){ return { pin:a.pin, nome:a.nome, cognome:a.cognome, classe:j.classe||'', ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false, valutazione:null, valutazione_snapshot:null }; });
     try{ SB.from('fatt_studenti').upsert(rows, { onConflict:'pin' }).then(function(){}, function(){}); }catch(e){}
   }
   function cloudSetArchivio(j){
@@ -1113,7 +1115,7 @@
   }
   function cloudResetPresenze(){
     if(!SB) return;
-    try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false }).gte('pin', '').then(function(){}, function(){}); }catch(e){}
+    try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false, valutazione:null, valutazione_snapshot:null }).gte('pin', '').then(function(){}, function(){}); }catch(e){}
     try{ SB.from('fatt_config').update({ assegnata_id:null, livello:null }).eq('id', 1).then(function(){}, function(){}); }catch(e){}
     try{ SB.from('fatt_tentativi').delete().neq('modalita', 'compiti').gte('created_at', '2000-01-01').then(function(){}, function(){}); }catch(e){} // il Reset NON tocca l'archivio compiti a casa
   }
@@ -1121,10 +1123,10 @@
   // NON tocca le altre classi, né l'archivio fatture, né i compiti a casa. Il roster della classe resta.
   function cloudResetClasse(classe){
     if(!SB || !classe) return;
-    try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false }).eq('classe', classe).then(function(){}, function(){}); }catch(e){}
+    try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false, valutazione:null, valutazione_snapshot:null }).eq('classe', classe).then(function(){}, function(){}); }catch(e){}
     try{ SB.from('fatt_tentativi').delete().eq('classe', classe).neq('modalita', 'compiti').then(function(){}, function(){}); }catch(e){}
     (CLASSE && CLASSE.alunni ? CLASSE.alunni : []).forEach(function(a){
-      if(CLOUD_STUD[a.pin]){ var s = CLOUD_STUD[a.pin]; s.stato='non_iniziato'; s.consegnata=false; s.riammesso=false; s.ultimo_accesso=null; s.fattura_assegnata=null; s.livello_assegnato=null; s.fattura_corrente=null; }
+      if(CLOUD_STUD[a.pin]){ var s = CLOUD_STUD[a.pin]; s.stato='non_iniziato'; s.consegnata=false; s.riammesso=false; s.ultimo_accesso=null; s.fattura_assegnata=null; s.livello_assegnato=null; s.fattura_corrente=null; s.valutazione=null; s.valutazione_snapshot=null; }
       CLOUD_CONS[a.pin] = {};
     });
   }
@@ -3873,7 +3875,7 @@
     cloudUpsertClasse(j);
     cloudSetModalitaCompiti(j.classe || '', false); // ricaricare una classe la riporta in dashboard (esce da modalità compiti)
     // Seed immediato di CLOUD_STUD (l'upsert è asincrono): la nuova classe compare subito nella tendina, senza sostituire le altre.
-    j.alunni.forEach(function(a){ if(!a.pin) return; if(!CLOUD_STUD[a.pin]) CLOUD_STUD[a.pin] = { pin:a.pin, stato:'non_iniziato' }; CLOUD_STUD[a.pin].nome = a.nome; CLOUD_STUD[a.pin].cognome = a.cognome; CLOUD_STUD[a.pin].classe = j.classe || ''; });
+    j.alunni.forEach(function(a){ if(!a.pin) return; if(!CLOUD_STUD[a.pin]) CLOUD_STUD[a.pin] = { pin:a.pin, stato:'non_iniziato' }; var cs = CLOUD_STUD[a.pin]; cs.nome = a.nome; cs.cognome = a.cognome; cs.classe = j.classe || ''; cs.stato = 'non_iniziato'; cs.consegnata = false; cs.riammesso = false; cs.ultimo_accesso = null; cs.fattura_assegnata = null; cs.livello_assegnato = null; cs.fattura_corrente = null; cs.valutazione = null; cs.valutazione_snapshot = null; });
     STATE.classeAttiva = j.classe || '';
     CLASSE = j; try{ localStorage.setItem('ff_classe', JSON.stringify(j)); }catch(e){}
     renderDocente();
