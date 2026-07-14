@@ -1141,6 +1141,25 @@
       }, function(){ cb && cb(); });
     }catch(e){ cb && cb(); }
   }
+  // RECUPERO DEL LAVORO DAL CLOUD. Il lavoro dell'alunno non vive solo sul suo dispositivo (ff_lavoro): ogni
+  // consegna (anche quella "riaperta" dal Riammetti, completato=false) conserva in risposte.dashboardAlunno
+  // l'HTML della sua fattura compilata. Così l'alunno ritrova il suo lavoro anche da un ALTRO dispositivo,
+  // dopo giorni, o dopo un Backup/Ripristino. Ritorna l'HTML più recente, ignorando le righe «non svolta».
+  function cloudRecuperaLavoro(pin, fatturaId, cb){
+    if(!SB || !pin || !fatturaId){ cb && cb(null); return; }
+    try{
+      SB.from('fatt_tentativi').select('risposte,created_at').eq('pin', pin).eq('fattura_id', fatturaId)
+        .neq('modalita', 'compiti').order('created_at', { ascending:false }).limit(5).then(function(res){
+        var rows = (res && res.data) ? res.data : [];
+        for(var i = 0; i < rows.length; i++){
+          var rr = rows[i].risposte || {};
+          if(rr.nonSvolta) continue;                       // riga segnaposto «non svolta»: nessun lavoro dentro
+          if(rr.dashboardAlunno){ cb && cb(rr.dashboardAlunno); return; }
+        }
+        cb && cb(null);
+      }, function(){ cb && cb(null); });
+    }catch(e){ cb && cb(null); }
+  }
   function cloudSetAssegnazione(id, liv){
     if(!SB) return;
     try{ SB.from('fatt_config').update({ assegnata_id:id||null, livello:(liv!=null?String(liv):null), updated_at:new Date().toISOString() }).eq('id', 1).then(function(){}, function(){}); }catch(e){}
@@ -1256,8 +1275,12 @@
     if(!SB || !pin) return;
     if(azzeraConsegne){
       // RIAMMETTI (dopo consegna): torna IN CORSO e tutte le sue fatture tornano DA CONSEGNARE.
+      // IMPORTANTE: le consegne NON si cancellano più (prima si perdeva il lavoro!). Si "riaprono" mettendo
+      // completato=false: così non contano più come consegnate (dashboard/export/consegnate-locali guardano
+      // completato=true), ma il LAVORO resta nel cloud dentro risposte.dashboardAlunno e l'alunno se lo ritrova
+      // rientrando anche da un ALTRO dispositivo o dopo giorni (backup/ripristino compresi).
       try{ SB.from('fatt_studenti').update({ riammesso:true, stato:'in_corso', consegnata:false }).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
-      try{ SB.from('fatt_tentativi').delete().eq('pin', pin).neq('modalita', 'compiti').then(function(){}, function(){}); }catch(e){} // azzera solo le verifiche, non i compiti a casa
+      try{ SB.from('fatt_tentativi').update({ completato:false }).eq('pin', pin).eq('completato', true).neq('modalita', 'compiti').then(function(){}, function(){}); }catch(e){} // riapre solo le verifiche, non i compiti a casa
       if(CLOUD_STUD[pin]){ CLOUD_STUD[pin].stato = 'in_corso'; CLOUD_STUD[pin].consegnata = false; CLOUD_STUD[pin].riammesso = true; }
       CLOUD_CONS[pin] = {};
     } else {
@@ -1410,10 +1433,24 @@
     var nomeCompleto = al ? ((al.cognome||'') + ' ' + (al.nome||'')).trim() : pin;
     var cognome = al ? (al.cognome||'') : '';
     try{
-      SB.from('fatt_tentativi').select('fattura_id').eq('pin', pin).eq('completato', true).then(function(res){
-        var done = {}; ((res && res.data) || []).forEach(function(t){ if(t.fattura_id) done[t.fattura_id] = true; });
+      SB.from('fatt_tentativi').select('id,fattura_id,completato,risposte').eq('pin', pin).neq('modalita', 'compiti').order('created_at', { ascending:true }).then(function(res){
+        var done = {}, riapribile = {};
+        ((res && res.data) || []).forEach(function(t){
+          if(!t.fattura_id) return;
+          if(t.completato){ done[t.fattura_id] = true; return; }
+          // riga "riaperta" dal Riammetti: contiene ancora il LAVORO dell'alunno → si recupera, non si butta.
+          var rr = t.risposte || {};
+          if(!rr.nonSvolta && rr.dashboardAlunno) riapribile[t.fattura_id] = t.id;
+        });
         assigned.forEach(function(x){
           if(done[x.id]) return; // già consegnata davvero → non toccare
+          // L'alunno è scollegato ma nel cloud c'è il suo lavoro (riaperto dal Riammetti): lo RICONSEGNO,
+          // invece di buttarlo via marcandolo «non svolta». Niente più lavoro perso.
+          if(riapribile[x.id]){
+            try{ SB.from('fatt_tentativi').update({ completato:true }).eq('id', riapribile[x.id]).then(function(){}, function(){}); }catch(e){}
+            CLOUD_CONS[pin] = CLOUD_CONS[pin] || {}; CLOUD_CONS[pin][x.id] = true;
+            return;
+          }
           var f = (typeof FATTURE!=='undefined') ? FATTURE.find(function(y){ return y.id === x.id; }) : null;
           var cortCorr = ''; try{ if(f) cortCorr = buildCortesia(f.soluzione); }catch(e){}
           try{ SB.from('fatt_tentativi').insert({ pin:pin, classe:(CLASSE&&CLASSE.classe)||'', fattura_id:x.id, modalita:'forzata', completato:true,
@@ -3054,6 +3091,23 @@
     // Se ho ripristinato un lavoro salvato, NON azzero le anagrafiche già compilate.
     applicaLivello(LIVELLO, !ripristinato);
     aggiornaNeretto(); // importi merce in grassetto fin dall'inizio, a ogni livello
+    // Niente lavoro su QUESTO dispositivo? Provo a recuperarlo dal CLOUD (consegna precedente, anche riaperta
+    // dal Riammetti). Così dopo Backup/Ripristino, o entrando da un altro PC giorni dopo, ritrova la sua verifica.
+    if(!ripristinato && !STATE.modalitaCompiti && STATE.studente){
+      var attesaId = STATE.assegnataId;
+      cloudRecuperaLavoro(STATE.studente.pin, attesaId, function(html){
+        if(!html || !STATE.studente) return;
+        if(STATE.assegnataId !== attesaId) return;              // nel frattempo ha cambiato fattura
+        if(STATE.consegnata) return;                            // ha già consegnato: non toccare
+        if(byId('editor').style.display === 'none') return;     // non è più nell'editor
+        byId('editor').innerHTML = html;
+        wireEditor();
+        reidrataDinamici();
+        applicaLivello(LIVELLO, false);                         // NON azzerare le anagrafiche recuperate
+        aggiornaNeretto();
+        try{ salvaLavoro(); }catch(e){}                         // da ora ce l'ha anche in locale
+      });
+    }
     var top = byId('topbar-info'); top.innerHTML = '';
     var span = document.createElement('span'); span.textContent = STATE.studente.cognome + ' ' + STATE.studente.nome + ' · classe ' + CLASSE.classe;
     var out = document.createElement('span'); out.className = 'link'; out.textContent = 'Esci'; out.addEventListener('click', goGate);
