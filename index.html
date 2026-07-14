@@ -1301,13 +1301,40 @@
   // deve CHIUDERSI DA SOLO: ferma tutti i sorveglianti, ferma il battito di presenza e CANCELLA la propria
   // presenza dal cloud. Così la dashboard del docente resta pulita: niente alunni "Collegato" fantasma.
   function terminaSessionePerReset(){
+    if(STATE.sessioneChiusa) return;      // una volta sola
+    STATE.sessioneChiusa = true;
     var pin = STATE.studente ? STATE.studente.pin : '';
+    stopSessioneWatcher();
     stopAssegnazioneWatcher(); stopConsegnaWatcher(); stopBloccoWatcher(); stopAttesaWatcher();
     stopPresenza();                       // niente più battiti: non può più resuscitare
     if(pin) cloudClearPresenza(pin);      // e cancello subito quello già scritto
     try{ sessionStorage.removeItem('ff_studente_attivo'); }catch(e){}
     STATE.mieAssegnate = []; STATE.assegnataId = null; STATE.multiMode = false; STATE.consegnata = false;
     mostraBloccoMsg('🔄', 'Verifica azzerata', 'Il docente ha azzerato la verifica. Quando te lo dice, rientra col tuo PIN.', '#254a86');
+  }
+  /* ---------- Guardia della SESSIONE (lato alunno): vale su QUALSIASI schermata ----------
+     Il docente ha resettato o ricaricato la classe? Allora nel cloud l'alunno torna 'non_iniziato' E resta
+     SENZA assegnazione. Questa coppia significa una cosa sola: la verifica è stata azzerata. Il dispositivo
+     si scollega da solo e cancella la propria presenza, così sulla dashboard non resta nessun fantasma
+     "Collegato" — nemmeno se l'alunno ha lasciato la scheda aperta.
+     NB: si "arma" solo dopo che il cloud ha confermato la sessione (altrimenti si autoterminerebbe al login).
+     Lo "Sblocca" del docente rimette 'non_iniziato' ma LASCIA l'assegnazione → non scatta. Giusto così. */
+  function stopSessioneWatcher(){ if(STATE.sessTimer){ clearInterval(STATE.sessTimer); STATE.sessTimer = null; } }
+  function startSessioneWatcher(){
+    stopSessioneWatcher();
+    if(!SB) return;
+    STATE.sessArmed = false;
+    STATE.sessioneChiusa = false;
+    STATE.sessTimer = setInterval(function(){
+      if(!STATE.studente || STATE.modalitaCompiti) return;   // i compiti a casa non c'entrano
+      SB.from('fatt_studenti').select('stato,fattura_assegnata').eq('pin', STATE.studente.pin).maybeSingle().then(function(res){
+        var s = (res && res.data) ? res.data : null;
+        if(!s || !STATE.studente) return;
+        var st = s.stato || 'non_iniziato';
+        if(!STATE.sessArmed){ if(st !== 'non_iniziato') STATE.sessArmed = true; return; }
+        if(st === 'non_iniziato' && !s.fattura_assegnata) terminaSessionePerReset();
+      }, function(){});
+    }, 4000);
   }
   /* ---------- Sorvegliante del CAMBIO ASSEGNAZIONE in tempo reale (lato alunno) ---------- */
   function assegnazioniUguali(a, b){
@@ -3059,6 +3086,7 @@
       startPresenza();
       startConsegnaWatcher();
       startAssegnazioneWatcher();
+      startSessioneWatcher(); // se il docente resetta, questo dispositivo si scollega da solo (niente fantasmi)
       if(lista.length > 1){ mostraMenuFatture(); return; }
       STATE.assegnataId = lista.length ? lista[0].id : null;
       if(lista.length){ try{ localStorage.setItem('ff_livello', String(lista[0].liv || 2)); }catch(e){} }
