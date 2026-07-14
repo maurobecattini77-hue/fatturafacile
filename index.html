@@ -1128,12 +1128,13 @@
       }, function(){});
     }, 2500);
   }
-  // Ricostruisce le consegne LOCALI dell'alunno dal cloud (solo le REALI, non le "forzate/non svolte"),
-  // così alla riammissione le fatture non svolte tornano disponibili da rifare.
+  // Ricostruisce le consegne LOCALI dell'alunno dal cloud (solo le REALI, non le "forzate/non svolte").
+  // ATTENZIONE: conta SOLO le consegne di VERIFICA. I compiti a casa sono un mondo a parte: una fattura fatta
+  // come compito NON deve risultare «già consegnata» quando il docente la assegna in verifica.
   function rebuildConsegnateLocali(pin, cb){
     if(!SB){ cb && cb(); return; }
     try{
-      SB.from('fatt_tentativi').select('fattura_id,modalita').eq('pin', pin).eq('completato', true).then(function(res){
+      SB.from('fatt_tentativi').select('fattura_id,modalita').eq('pin', pin).eq('completato', true).neq('modalita', 'compiti').then(function(res){
         var ids = {};
         ((res && res.data) || []).forEach(function(t){ if(t.fattura_id && t.modalita !== 'forzata') ids[t.fattura_id] = true; });
         try{ localStorage.setItem('ff_consegnate_' + pin, JSON.stringify(Object.keys(ids))); }catch(e){}
@@ -1579,7 +1580,9 @@
   }
   function esportaHTML(){
     if(!SB){ showAlert('Cloud non disponibile.'); return; }
-    SB.from('fatt_tentativi').select('pin,fattura_id,risposte,created_at').eq('completato', true).order('created_at', {ascending:true}).then(function(res){
+    // SOLO le consegne di VERIFICA: i compiti a casa hanno il loro export («Archivio compiti») e non devono
+    // finire qui, altrimenti nel compito d'esame comparirebbe il lavoro fatto a casa.
+    SB.from('fatt_tentativi').select('pin,fattura_id,risposte,created_at').eq('completato', true).neq('modalita', 'compiti').order('created_at', {ascending:true}).then(function(res){
       var rows = (res && res.data) ? res.data : [];
       if(!rows.length){ showAlert('Nessuna consegna da esportare al momento.'); return; }
       // Raggruppa le consegne per alunno (ultima consegna per ciascuna fattura: le righe sono ordinate per created_at crescente).
