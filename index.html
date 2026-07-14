@@ -1308,9 +1308,16 @@
     stopAssegnazioneWatcher(); stopConsegnaWatcher(); stopBloccoWatcher(); stopAttesaWatcher();
     stopPresenza();                       // niente più battiti: non può più resuscitare
     if(pin) cloudClearPresenza(pin);      // e cancello subito quello già scritto
-    try{ sessionStorage.removeItem('ff_studente_attivo'); }catch(e){}
     STATE.mieAssegnate = []; STATE.assegnataId = null; STATE.multiMode = false; STATE.consegnata = false;
-    mostraBloccoMsg('🔄', 'Verifica azzerata', 'Il docente ha azzerato la verifica. Quando te lo dice, rientra col tuo PIN.', '#254a86');
+    byId('topbar-info').innerHTML = '';   // via i comandi della verifica ormai finita
+    if(!pin){ goGate(); return; }
+    // Niente schermate inutili: dopo il Reset la classe passa ai COMPITI A CASA, quindi l'alunno ci finisce
+    // dentro direttamente (ed è anche dove trova il voto, se il docente l'ha pubblicato). Se invece il docente
+    // ha solo ricaricato la classe (nuova verifica in arrivo), torna al PIN: rientrerà quando glielo dice lui.
+    cloudModalitaAlunno(pin, function(mode){
+      if(mode === 'compiti'){ avviaCompitiACasa(); return; }
+      goGate();
+    });
   }
   /* ---------- Guardia della SESSIONE (lato alunno): vale su QUALSIASI schermata ----------
      Il docente ha resettato o ricaricato la classe? Allora nel cloud l'alunno torna 'non_iniziato' E resta
@@ -2812,7 +2819,7 @@
     window.scrollTo(0, 0);
   }
   function goGate(){
-    stopAttesaWatcher(); stopPresenza(); stopCollegatiTimer(); stopBloccoWatcher(); stopConsegnaWatcher(); stopAssegnazioneWatcher(); STATE.riammesso = false; STATE.modalitaCompiti = false; STATE.solExitFn = null; if(STATE.studente){ cloudClearPresenza(STATE.studente.pin); STATE.studente = null; }
+    stopAttesaWatcher(); stopPresenza(); stopCollegatiTimer(); stopBloccoWatcher(); stopConsegnaWatcher(); stopAssegnazioneWatcher(); stopSessioneWatcher(); STATE.riammesso = false; STATE.modalitaCompiti = false; STATE.solExitFn = null; if(STATE.studente){ cloudClearPresenza(STATE.studente.pin); STATE.studente = null; }
     try{ sessionStorage.removeItem('ff_studente_attivo'); sessionStorage.removeItem('ff_docente_attivo'); }catch(e){}
     byId('gate-doc').style.display = 'none'; byId('gate-pin').style.display = '';
     byId('in-pin').value = ''; byId('in-pass').value = '';
