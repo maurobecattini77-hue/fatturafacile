@@ -4036,7 +4036,13 @@
     try{ var g=localStorage.getItem('ff_assegnata'); if(g){ STATE.assegnate=parseAssegnazione(g); STATE.assegnataId=assegnPrimoId(g); } }catch(e){}
     buildRubrica();
     var al = (CLASSE && CLASSE.alunni) ? CLASSE.alunni.find(function(a){ return a.pin === pin; }) : null;
-    if(al){ entraStudente(al); return; }
+    if(al){
+      // Se le fatture non ci sono (o non sono ancora arrivate), le prendo dal cloud PRIMA di entrare:
+      // senza archivio l'alunno resterebbe piantato su «In attesa» pur avendo la verifica assegnata.
+      if(typeof FATTURE === 'undefined' || !FATTURE || !FATTURE.length){ cloudCaricaContesto(function(){ entraStudente(al); }); }
+      else { entraStudente(al); }
+      return;
+    }
     // non in locale: cerca nel cloud (accesso da un altro dispositivo)
     byId('err-alunno').textContent = 'Verifica in corso…';
     cloudLoginPin(pin, function(stud){
