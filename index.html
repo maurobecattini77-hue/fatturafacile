@@ -1164,18 +1164,21 @@
   }
   function cloudResetPresenze(){
     if(!SB) return;
-    try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false, valutazione:null, valutazione_snapshot:null }).gte('pin', '').then(function(){}, function(){}); }catch(e){}
+    try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false }).gte('pin', '').then(function(){}, function(){}); }catch(e){}
     try{ SB.from('fatt_config').update({ assegnata_id:null, livello:null }).eq('id', 1).then(function(){}, function(){}); }catch(e){}
     try{ SB.from('fatt_tentativi').delete().neq('modalita', 'compiti').gte('created_at', '2000-01-01').then(function(){}, function(){}); }catch(e){} // il Reset NON tocca l'archivio compiti a casa
   }
   // Reset di UNA SOLA classe: azzera assegnazione e stato dei suoi alunni + cancella le sue consegne di VERIFICA.
   // NON tocca le altre classi, né l'archivio fatture, né i compiti a casa. Il roster della classe resta.
+  // NB: il Reset NON tocca valutazione/valutazione_snapshot: manda la classe in COMPITI A CASA, ed è proprio lì
+  // che gli alunni entrano a vedere il VOTO PUBBLICATO (lo snapshot esiste apposta per sopravvivere al Reset che
+  // cancella le consegne). I voti si azzerano SOLO ricaricando la classe (Carica classe = nuova verifica).
   function cloudResetClasse(classe){
     if(!SB || !classe) return;
-    try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false, valutazione:null, valutazione_snapshot:null }).eq('classe', classe).then(function(){}, function(){}); }catch(e){}
+    try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false }).eq('classe', classe).then(function(){}, function(){}); }catch(e){}
     try{ SB.from('fatt_tentativi').delete().eq('classe', classe).neq('modalita', 'compiti').then(function(){}, function(){}); }catch(e){}
     (CLASSE && CLASSE.alunni ? CLASSE.alunni : []).forEach(function(a){
-      if(CLOUD_STUD[a.pin]){ var s = CLOUD_STUD[a.pin]; s.stato='non_iniziato'; s.consegnata=false; s.riammesso=false; s.ultimo_accesso=null; s.fattura_assegnata=null; s.livello_assegnato=null; s.fattura_corrente=null; s.valutazione=null; s.valutazione_snapshot=null; }
+      if(CLOUD_STUD[a.pin]){ var s = CLOUD_STUD[a.pin]; s.stato='non_iniziato'; s.consegnata=false; s.riammesso=false; s.ultimo_accesso=null; s.fattura_assegnata=null; s.livello_assegnato=null; s.fattura_corrente=null; }
       CLOUD_CONS[a.pin] = {};
     });
   }
@@ -2762,10 +2765,16 @@
     var val = (CLOUD_STUD[a.pin] || {}).valutazione;
     if(val && val.voto_finale){
       var suff = (val.perc != null && val.perc >= 59.1); // sufficiente = voto >= 6
+      var wrap = document.createElement('div'); wrap.style.cssText = 'display:inline-flex; flex-direction:column; align-items:center; gap:3px;';
       var sp = document.createElement('span'); sp.textContent = val.voto_finale;
       sp.style.cssText = 'display:inline-block; border-radius:20px; padding:3px 13px; font-size:14px; font-weight:600; ' + (suff ? 'background:#eaf3de; color:#3b6d11;' : 'background:#faeeda; color:#854f0b;');
-      if(val.pubblicata) sp.title = 'Voto pubblicato';
-      td.appendChild(sp);
+      wrap.appendChild(sp);
+      // Indicatore a colpo d'occhio: voto pubblicato (visibile all'alunno) o ancora da pubblicare.
+      var badge = document.createElement('span');
+      if(val.pubblicata){ badge.textContent = '✓ pubblicato'; badge.style.cssText = 'font-size:10px; font-weight:700; color:#3b6d11; white-space:nowrap;'; badge.title = 'L\'alunno lo vede entrando col PIN'; }
+      else { badge.textContent = '• da pubblicare'; badge.style.cssText = 'font-size:10px; font-weight:600; color:#a9772b; white-space:nowrap;'; badge.title = 'Valutato ma non ancora pubblicato: premi «Pubblica voti»'; }
+      wrap.appendChild(badge);
+      td.appendChild(wrap);
     } else { var d = document.createElement('span'); d.textContent = '—'; d.style.color = '#b4b2a9'; td.appendChild(d); }
     return td;
   }
