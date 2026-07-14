@@ -1297,6 +1297,18 @@
       if(CLOUD_STUD[pin]){ CLOUD_STUD[pin].stato = (giaCons ? 'consegnato' : 'non_iniziato'); CLOUD_STUD[pin].ultimo_accesso = null; CLOUD_STUD[pin].riammesso = true; }
     }
   }
+  // Il docente ha AZZERATO la verifica (Reset classe, o ha ricaricato la classe). Il dispositivo dell'alunno
+  // deve CHIUDERSI DA SOLO: ferma tutti i sorveglianti, ferma il battito di presenza e CANCELLA la propria
+  // presenza dal cloud. Così la dashboard del docente resta pulita: niente alunni "Collegato" fantasma.
+  function terminaSessionePerReset(){
+    var pin = STATE.studente ? STATE.studente.pin : '';
+    stopAssegnazioneWatcher(); stopConsegnaWatcher(); stopBloccoWatcher(); stopAttesaWatcher();
+    stopPresenza();                       // niente più battiti: non può più resuscitare
+    if(pin) cloudClearPresenza(pin);      // e cancello subito quello già scritto
+    try{ sessionStorage.removeItem('ff_studente_attivo'); }catch(e){}
+    STATE.mieAssegnate = []; STATE.assegnataId = null; STATE.multiMode = false; STATE.consegnata = false;
+    mostraBloccoMsg('🔄', 'Verifica azzerata', 'Il docente ha azzerato la verifica. Quando te lo dice, rientra col tuo PIN.', '#254a86');
+  }
   /* ---------- Sorvegliante del CAMBIO ASSEGNAZIONE in tempo reale (lato alunno) ---------- */
   function assegnazioniUguali(a, b){
     var sa = (a||[]).map(function(x){ return x.id + ':' + x.liv; }).sort().join(';');
@@ -1319,7 +1331,14 @@
         if(STATE.consegnata) return;
         if(ctx && ctx.stato === 'consegnato') return;
         var nuova = ((ctx && ctx.lista) || []).filter(function(x){ return FATTURE.some(function(f){ return f.id === x.id; }); });
-        if(!nuova.length) return;
+        // L'alunno AVEVA un'assegnazione e ora NON ce l'ha più → il docente ha fatto RESET (o ha ricaricato la
+        // classe). La sua sessione non ha più senso: lo scollego e CANCELLO la sua presenza dal cloud.
+        // Senza questo, una scheda lasciata aperta continua a pingare ogni 30s e resuscita l'alunno come
+        // «Collegato» su una dashboard che il docente ha appena azzerato: il classico fantasma.
+        if(!nuova.length){
+          if((STATE.mieAssegnate || []).length) terminaSessionePerReset();
+          return;
+        }
         if(assegnazioniUguali(nuova, STATE.mieAssegnate)) return; // nessun cambio
         var vecchia = STATE.mieAssegnate || [];
         var nuoveId = {}; nuova.forEach(function(x){ nuoveId[x.id] = true; });
