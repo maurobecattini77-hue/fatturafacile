@@ -404,6 +404,93 @@
   .selfx-liv{ flex:0 0 auto; width:132px; }
   .selfx-eye{ flex:0 0 auto; border:1px solid var(--line2,#dbe4f2); background:#fff; border-radius:8px; padding:4px 9px; font-size:14px; cursor:pointer; line-height:1; }
   .selfx-eye:hover{ background:#eef2f7; }
+
+  /* ============================================================
+     RESPONSIVE — cellulare e tablet (aggiunto in fondo, non tocca il resto)
+     ============================================================ */
+  .roster-scroll{ overflow-x:auto; -webkit-overflow-scrolling:touch; }
+
+  @media (max-width: 900px){
+    .topbar-inner{ padding:12px 16px; }
+    .wrap{ padding:20px 16px 40px; }
+    .card .body{ padding:16px; }
+    /* Anagrafica: Azienda|Cliente e Dati|Pagamento in colonna singola */
+    #editor [style*="grid-template-columns:1fr 1fr"]{ grid-template-columns:1fr !important; }
+    /* Riepilogo e castelletto IVA sotto, a piena larghezza */
+    #fondo{ flex-direction:column !important; align-items:stretch !important; gap:16px !important; }
+    #riepilogo{ width:auto !important; flex:1 1 auto !important; }
+    #dettaglio-iva{ overflow-x:auto; -webkit-overflow-scrolling:touch; }
+    /* Articoli: 3 colonne su tablet */
+    #editor .artbox .grid{ grid-template-columns:repeat(3, minmax(0,1fr)); }
+    /* Documento di cortesia / soluzione */
+    .cx-head{ flex-direction:column; gap:12px; padding:20px; }
+    .cx-doc{ text-align:left; }
+    .cx-dest{ width:auto; margin:16px 20px 0; }
+    .cx-body{ padding:18px 20px 8px; overflow-x:auto; }
+    .cx-sumwrap{ padding:6px 20px 0; display:block; }
+    .cx-pay, .cx-note, .cx-foot{ margin-left:20px; margin-right:20px; }
+    #cortesia-page .cx-sum, #soluzione-page .cx-sum, .cx-sum{ width:auto !important; }
+  }
+
+  @media (max-width: 600px){
+    .topbar-inner{ padding:10px 14px; gap:10px; }
+    .ff-badge{ width:38px; height:44px; }
+    .ff-badge span.ff{ font-size:16px; }
+    .ff-word{ font-size:17px; }
+    .wrap{ padding:16px 12px 36px; }
+    input, select{ height:42px; }
+    .doc-head h1{ font-size:21px; }
+    /* Editor: TUTTE le griglie interne in colonna singola */
+    #editor [style*="grid-template-columns"]{ grid-template-columns:1fr !important; }
+    #editor .artbox .grid{ grid-template-columns:1fr !important; }
+    .artbox{ padding:12px; }
+    .sumline{ flex-wrap:wrap; }
+    .cast-in{ width:80px; }
+    /* Dashboard docente: tabella scrollabile in orizzontale */
+    .roster-scroll{ margin:0 -12px; padding:0 12px; }
+    table.roster{ min-width:760px; }
+    .doc-tiles .tile{ min-width:0; flex:1 1 30%; padding:12px 8px; }
+    .doc-tiles .tile-num{ font-size:22px; }
+    /* Barra strumenti: pulsanti comodi da toccare */
+    .toolbar-doc{ gap:8px; }
+    .toolbar-doc > button{ flex:1 1 auto; justify-content:center; }
+    #btn-reset{ margin-left:0 !important; }
+    #sel-classe, .sel-classe{ width:100%; }
+    /* Documento cortesia compatto */
+    .cx-head{ padding:16px; }
+    .cx-body{ padding:14px 16px 8px; }
+    .cx-dest{ margin:14px 16px 0; padding:12px 14px; }
+    .cx-pay, .cx-note, .cx-foot{ margin-left:16px; margin-right:16px; }
+    .cx-items{ font-size:12px; }
+    .cx-items thead th, .cx-items tbody td{ padding:6px 4px; }
+    #cortesia-page .cx-row > span:first-child, #soluzione-page .cx-row > span:first-child{ max-width:none; }
+    .cx-doc-title{ font-size:22px; } .cx-seller{ font-size:19px; }
+    /* Azioni cortesia (Torna / Chiudi e consegna) a piena larghezza */
+    .cx-actions{ flex-wrap:wrap; }
+    .cx-actions > button{ flex:1 1 auto; justify-content:center; }
+    /* Visualizzatore a schede + valutazione */
+    .vc-spacer{ margin-left:0; width:100%; }
+    .vv-row{ flex-direction:column; }
+    .vv-left{ flex:auto; }
+    .vv-sum{ padding:12px; }
+    .vv-voto{ font-size:28px; }
+    /* Testo esercitazione */
+    .vb-grid{ grid-template-columns:1fr; }
+    /* Menù fatture (studente) e righe archivio */
+    .menu-row{ flex-wrap:wrap; }
+    .menu-info{ flex:1 1 100%; }
+    .menu-cta{ flex:1 1 100%; }
+    .menu-cta .btn-compila, .menu-cta .btn-ghost{ width:100%; }
+    .arch-row{ flex-wrap:wrap; }
+    .arch-info{ flex:1 1 60%; }
+    /* Card valutazione alunno */
+    .val-card{ gap:12px; padding:12px 14px; }
+    .val-card .vc-voto{ font-size:26px; }
+    /* Modali */
+    .modal-overlay{ padding:14px; }
+    /* Login */
+    #gate{ padding:16px; }
+  }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
@@ -475,10 +562,12 @@
     <div class="tile"><div class="tile-num" id="tile-incorso">0</div><div class="tile-lbl">In corso</div></div>
     <div class="tile"><div class="tile-num" id="tile-consegnati">0</div><div class="tile-lbl">Consegnati</div></div>
   </div>
+  <div class="roster-scroll">
   <table class="roster">
     <thead><tr><th style="width:36px;">#</th><th style="width:230px;">Cognome e nome</th><th style="width:90px;">PIN</th><th style="width:210px;">Esercizio assegnato</th><th style="width:210px;">Stato</th><th style="width:120px;">Azioni</th><th style="width:80px; text-align:center;">Voto</th><th style="width:100px; text-align:center;">Valuta</th></tr></thead>
     <tbody id="roster-body"></tbody>
   </table>
+  </div>
 </div>
 
 <!-- ============ VISTA IN ATTESA (studente senza esercitazione assegnata) ============ -->
