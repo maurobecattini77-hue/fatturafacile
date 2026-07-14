@@ -1633,42 +1633,93 @@
       buildExportDoc(data, (classe && classe !== '—') ? classe : ((CLASSE&&CLASSE.classe)||''), 'Compiti a casa', 'compiti');
     }, function(){ showAlert('Errore nel recupero dei compiti.'); });
   }
+  // BACKUP DELLA SOLA CLASSE ATTIVA (versione 2). Nel file finiscono SOLO i suoi alunni e le SUE consegne,
+  // più l'archivio fatture e il fatto che la classe fosse o no in "compiti a casa". Le altre classi NON
+  // vengono toccate, né salvate: così il ripristino non può disturbarle.
   function backupClasse(){
     if(!SB){ showAlert('Cloud non disponibile.'); return; }
-    SB.from('fatt_studenti').select('*').then(function(r1){
-      SB.from('fatt_config').select('*').eq('id',1).maybeSingle().then(function(r2){
-        SB.from('fatt_tentativi').select('*').then(function(r3){
-          var snap = { app:'fattura-facile', versione:1, data:new Date().toISOString(), studenti:(r1&&r1.data)||[], config:(r2&&r2.data)||null, tentativi:(r3&&r3.data)||[] };
-          ff_download('backup_'+((CLASSE&&CLASSE.classe)||'classe')+'_'+ff_dateStamp()+'.json', JSON.stringify(snap,null,2), 'application/json');
+    var cl = (CLASSE && CLASSE.classe) || STATE.classeAttiva || '';
+    if(!cl){ showAlert('Nessuna classe selezionata: scegli prima la classe da salvare.'); return; }
+    SB.from('fatt_studenti').select('*').eq('classe', cl).then(function(r1){
+      var studenti = (r1 && r1.data) ? r1.data : [];
+      if(!studenti.length){ showAlert('Nessun alunno nella classe ' + cl + ': niente da salvare.'); return; }
+      var pins = studenti.map(function(s){ return s.pin; });
+      SB.from('fatt_config').select('archivio,compiti_classi').eq('id', 1).maybeSingle().then(function(r2){
+        var cfg = (r2 && r2.data) ? r2.data : null;
+        var inCompiti = !!(cfg && Array.isArray(cfg.compiti_classi) && cfg.compiti_classi.indexOf(cl) !== -1);
+        // le consegne le prendo per PIN (più sicuro del campo classe, che su righe vecchie può mancare)
+        SB.from('fatt_tentativi').select('*').in('pin', pins).then(function(r3){
+          var tentativi = (r3 && r3.data) ? r3.data : [];
+          var snap = { app:'fattura-facile', versione:2, classe:cl, data:new Date().toISOString(),
+                       studenti:studenti, tentativi:tentativi,
+                       archivio:(cfg ? cfg.archivio : null), compitiClasse:inCompiti };
+          ff_download('backup_' + cl + '_' + ff_dateStamp() + '.json', JSON.stringify(snap, null, 2), 'application/json');
+          showAlert('Backup della classe ' + cl + ' salvato: ' + studenti.length + ' alunni e ' + tentativi.length
+            + (tentativi.length === 1 ? ' consegna.' : ' consegne.') + ' Nel file c\'è SOLO questa classe.');
         }, function(){ showAlert('Errore backup (consegne).'); });
-      }, function(){ showAlert('Errore backup (config).'); });
-    }, function(){ showAlert('Errore backup (studenti).'); });
+      }, function(){ showAlert('Errore backup (archivio).'); });
+    }, function(){ showAlert('Errore backup (alunni).'); });
   }
+  // RIPRISTINO DELLA SOLA CLASSE del file. Rimette alunni + consegne di QUELLA classe e la riporta com'era
+  // (dashboard o compiti a casa). NON sovrascrive la configurazione globale: dell'archivio aggiorna solo le
+  // fatture, e della lista "compiti a casa" tocca SOLO questa classe. Le altre classi restano intatte.
+  // Le consegne si ri-inseriscono senza cancellare nulla: i compiti fatti nel frattempo non si perdono.
   function ripristinaClasse(j){
     if(!SB){ showAlert('Cloud non disponibile.'); return; }
-    if(!j || !Array.isArray(j.studenti)){ showAlert('File di backup non valido.'); return; }
-    try{ SB.from('fatt_studenti').upsert(j.studenti, {onConflict:'pin'}).then(function(){}, function(){}); }catch(e){}
-    if(j.config){ try{ SB.from('fatt_config').upsert(j.config, {onConflict:'id'}).then(function(){}, function(){}); }catch(e){} }
-    if(Array.isArray(j.tentativi) && j.tentativi.length){ try{ SB.from('fatt_tentativi').upsert(j.tentativi, {onConflict:'id'}).then(function(){}, function(){}); }catch(e){} }
-    // ripristino anche in LOCALE: classe, archivio, assegnazione (così compaiono subito senza ricaricare la classe)
+    if(!j || !Array.isArray(j.studenti) || !j.studenti.length){ showAlert('File di backup non valido.'); return; }
+    var v2 = (j.versione >= 2) || !!j.classe;
+    var classe = j.classe || (j.studenti[0] && j.studenti[0].classe) || '';
+    // Backup VECCHIO (conteneva tutte le classi): tengo solo gli alunni della classe del file, per non
+    // ribaltare le altre classi con dati ormai sorpassati.
+    var studenti = v2 ? j.studenti : j.studenti.filter(function(s){ return (s.classe || '') === classe; });
+    var pins = {}; studenti.forEach(function(s){ pins[s.pin] = true; });
+    var tentativi = (Array.isArray(j.tentativi) ? j.tentativi : []).filter(function(t){ return pins[t.pin]; });
+
+    try{ SB.from('fatt_studenti').upsert(studenti, {onConflict:'pin'}).then(function(){}, function(){}); }catch(e){}
+    if(tentativi.length){ try{ SB.from('fatt_tentativi').upsert(tentativi, {onConflict:'id'}).then(function(){}, function(){}); }catch(e){} }
+
+    var archivio = v2 ? j.archivio : (j.config ? j.config.archivio : null);
+    if(archivio){ try{ SB.from('fatt_config').update({ archivio:archivio }).eq('id', 1).then(function(){}, function(){}); }catch(e){} }
+
+    // "compiti a casa": aggiorno SOLO questa classe dentro la lista, senza riscrivere quella delle altre.
+    var vuoleCompiti = v2 ? !!j.compitiClasse
+      : !!(j.config && Array.isArray(j.config.compiti_classi) && j.config.compiti_classi.indexOf(classe) !== -1);
     try{
-      var classe = (j.studenti[0] && j.studenti[0].classe) || '';
-      var alunni = j.studenti.map(function(s){ return { pin:s.pin, nome:s.nome, cognome:s.cognome }; });
-      CLASSE = { classe:classe, alunni:alunni };
+      SB.from('fatt_config').select('compiti_classi').eq('id', 1).maybeSingle().then(function(res){
+        var arr = (res && res.data && Array.isArray(res.data.compiti_classi)) ? res.data.compiti_classi.slice() : [];
+        var i = arr.indexOf(classe);
+        if(vuoleCompiti && i === -1) arr.push(classe);
+        if(!vuoleCompiti && i !== -1) arr.splice(i, 1);
+        STATE.compitiClassi = arr;
+        try{ SB.from('fatt_config').update({ compiti_classi:arr }).eq('id', 1).then(function(){}, function(){}); }catch(e){}
+        refreshCloudStud(function(){ refreshConsegne(function(){ if(typeof renderDocente === 'function') renderDocente(); }); });
+      }, function(){});
+    }catch(e){}
+
+    // in LOCALE: rendo attiva la classe ripristinata, con il suo archivio e la sua assegnazione
+    try{
+      CLASSE = { classe:classe, alunni:studenti.map(function(s){ return { pin:s.pin, nome:s.nome, cognome:s.cognome }; }) };
       localStorage.setItem('ff_classe', JSON.stringify(CLASSE));
-      // La classe ripristinata torna SUBITO in dashboard, com'era prima del Reset: la tolgo dalla
-      // modalità compiti LOCALE (il Reset ce l'aveva messa e nascosta) e la rendo la classe attiva,
-      // senza dover ripassare da «Carica classe». Il valore giusto è quello salvato nel backup.
-      STATE.compitiClassi = (j.config && Array.isArray(j.config.compiti_classi)) ? j.config.compiti_classi.slice() : (STATE.compitiClassi || []).filter(function(x){ return x !== classe; });
       STATE.classeAttiva = classe;
-      if(j.config && j.config.archivio){ FATTURE = adattaArchivio(j.config.archivio); localStorage.setItem('ff_archivio', JSON.stringify(FATTURE)); }
-      if(j.config && j.config.assegnata_id){ STATE.assegnate = parseAssegnazione(j.config.assegnata_id); STATE.assegnataId = assegnPrimoId(j.config.assegnata_id); localStorage.setItem('ff_assegnata', j.config.assegnata_id); }
-      else { STATE.assegnate = []; STATE.assegnataId = null; try{ localStorage.removeItem('ff_assegnata'); }catch(e){} }
-      if(j.config && j.config.livello){ localStorage.setItem('ff_livello', j.config.livello); }
+      if(archivio){ FATTURE = adattaArchivio(archivio); localStorage.setItem('ff_archivio', JSON.stringify(FATTURE)); }
+      // L'assegnazione è per-alunno: la ripesco da un alunno che ce l'ha, così il pannello "Assegna" la mostra.
+      var conAss = studenti.find(function(s){ return s.fattura_assegnata; });
+      if(conAss){
+        STATE.assegnate = parseAssegnazione(conAss.fattura_assegnata);
+        STATE.assegnataId = assegnPrimoId(conAss.fattura_assegnata);
+        localStorage.setItem('ff_assegnata', conAss.fattura_assegnata);
+        if(conAss.livello_assegnato) localStorage.setItem('ff_livello', String(conAss.livello_assegnato));
+      } else {
+        STATE.assegnate = []; STATE.assegnataId = null; try{ localStorage.removeItem('ff_assegnata'); }catch(e){}
+      }
       buildRubrica();
     }catch(e){}
-    showAlert('Situazione ripristinata: classe, archivio e assegnazioni ricaricati.');
-    setTimeout(function(){ refreshCloudStud(function(){ refreshConsegne(function(){ if(typeof renderDocente==='function') renderDocente(); }); }); }, 500);
+
+    showAlert('Classe ' + (classe || '—') + ' ripristinata: ' + studenti.length + ' alunni e ' + tentativi.length
+      + (tentativi.length === 1 ? ' consegna rimessi com\'erano.' : ' consegne rimessi com\'erano.')
+      + (vuoleCompiti ? ' La classe torna in COMPITI A CASA.' : ' La classe torna in dashboard.')
+      + ' Le altre classi non sono state toccate.');
+    setTimeout(function(){ refreshCloudStud(function(){ refreshConsegne(function(){ if(typeof renderDocente==='function') renderDocente(); }); }); }, 600);
   }
   try{ window.addEventListener('pagehide', function(){ if(STATE.studente) cloudClearPresenza(STATE.studente.pin); }); }catch(e){}
   function cloudCollegati(cb){
