@@ -1372,6 +1372,22 @@
       goGate();
     });
   }
+  // GETTONE DI SESSIONE: un ALTRO dispositivo ha "piantato" il suo gettone (di solito dopo uno «Sblocca» del
+  // docente) → questo dispositivo è stato sostituito. Si chiude da solo SENZA toccare il cloud (la riga ora è
+  // dell'altro: se cancellassi la presenza spegnerei lui). Fermo solo i MIEI timer e mostro un messaggio chiaro.
+  // true se un ALTRO dispositivo ha piantato il suo gettone: il mio è confermato nel cloud ma ora ce n'è uno diverso.
+  function sessioneSorpassata(sessioneCloud){
+    return !!(STATE.sessTokenConfirmed && STATE.sessToken && sessioneCloud && sessioneCloud !== STATE.sessToken);
+  }
+  function terminaSessionePerAltroDispositivo(){
+    if(STATE.sessioneChiusa) return; STATE.sessioneChiusa = true;
+    stopSessioneWatcher(); stopAssegnazioneWatcher(); stopConsegnaWatcher(); stopBloccoWatcher(); stopAttesaWatcher();
+    stopPresenza();                       // niente più battiti da questo dispositivo (non deve resuscitare)
+    STATE.proprietario = false;           // non sono più il proprietario: non scrivo più presenza né consegne
+    try{ sessionStorage.removeItem('ff_studente_attivo'); }catch(e){}
+    byId('topbar-info').innerHTML = '';
+    mostraBloccoMsg('🔒', 'Sessione spostata', 'Questa verifica è stata aperta su un altro dispositivo, quindi qui è stata chiusa. Se è un errore, avvisa il prof.', '#8a6d3b');
+  }
   /* ---------- Guardia della SESSIONE (lato alunno): vale su QUALSIASI schermata ----------
      Il docente ha resettato o ricaricato la classe? Allora nel cloud l'alunno torna 'non_iniziato' E resta
      SENZA assegnazione. Questa coppia significa una cosa sola: la verifica è stata azzerata. Il dispositivo
@@ -1387,9 +1403,11 @@
     STATE.sessioneChiusa = false;
     STATE.sessTimer = setInterval(function(){
       if(!STATE.studente || STATE.modalitaCompiti) return;   // i compiti a casa non c'entrano
-      SB.from('fatt_studenti').select('stato,fattura_assegnata').eq('pin', STATE.studente.pin).maybeSingle().then(function(res){
+      SB.from('fatt_studenti').select('stato,fattura_assegnata,sessione').eq('pin', STATE.studente.pin).maybeSingle().then(function(res){
         var s = (res && res.data) ? res.data : null;
         if(!s || !STATE.studente) return;
+        // GETTONE: se il MIO gettone è confermato nel cloud ma ora ce n'è un ALTRO, sono stato sostituito → mi chiudo.
+        if(sessioneSorpassata(s.sessione)){ terminaSessionePerAltroDispositivo(); return; }
         var st = s.stato || 'non_iniziato';
         if(!STATE.sessArmed){ if(st !== 'non_iniziato') STATE.sessArmed = true; return; }
         if(st === 'non_iniziato' && !s.fattura_assegnata) terminaSessionePerReset();
@@ -3275,6 +3293,13 @@
     // autorizzato a scrivere e cancellare la presenza di questo PIN.
     STATE.proprietario = true;
     STATE.modalitaCompiti = false; STATE.esercitazione = false;   // entrata in VERIFICA: la chiave del lavoro locale dev'essere quella verifica, non compiti
+    // GETTONE DI SESSIONE: questo dispositivo genera un codice unico e lo "pianta" nel cloud (colonna sessione).
+    // L'ULTIMO che entra vince. Se dopo uno «Sblocca» un altro dispositivo entra e pianta il SUO gettone, il
+    // watcher di sessione qui sotto se ne accorge (il gettone nel cloud non è più il mio) e questo dispositivo si
+    // chiude da solo, invece di continuare a lavorare in parallelo e sovrascrivere il lavoro dell'altro.
+    STATE.sessToken = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
+    STATE.sessTokenConfirmed = false;   // divento "vulnerabile" al sorpasso solo dopo che il MIO gettone è atterrato nel cloud
+    try{ if(pin) SB.from('fatt_studenti').update({ sessione: STATE.sessToken }).eq('pin', pin).then(function(res){ if(!(res && res.error)) STATE.sessTokenConfirmed = true; }, function(){}); }catch(e){}
     // Carico la bozza in corso già nel cloud PRIMA che l'alunno ricominci a scrivere: così, se ha più fatture
     // abbozzate, salvandone una non cancella le altre (la mappa parte piena, non da zero).
     STATE.bozzaMappa = {};
