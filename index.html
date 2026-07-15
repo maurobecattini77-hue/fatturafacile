@@ -1215,6 +1215,13 @@
         consegnata:!!STATE.consegnata
       }).eq('pin', STATE.studente.pin).then(function(){}, function(){});
     }catch(e){}
+    // AUTO-SBLOCCO: il proprietario è vivo e sta lavorando (non ha consegnato), ma nel cloud risulta 'bloccato'
+    // (falso blocco: un buco di rete di 45s + un tentativo d'accesso di un altro). Il suo stesso battito riporta
+    // lo stato a 'in_corso'. L'update è CONDIZIONATO a stato='bloccato' (WHERE), quindi è un no-op quando non serve
+    // e non tocca mai 'consegnato' o 'da_consegnare'. Prima invece restava "Bloccato" finché il docente non sbloccava a mano.
+    if(!STATE.consegnata){
+      try{ SB.from('fatt_studenti').update({ stato:'in_corso' }).eq('pin', STATE.studente.pin).eq('stato', 'bloccato').then(function(){}, function(){}); }catch(e){}
+    }
   }
   function startPresenza(){ stopPresenza(); cloudPresenza(); STATE.presenzaTimer = setInterval(cloudPresenza, 10000); } // battito ogni 10s: la dashboard reagisce in fretta
   function stopPresenza(){ if(STATE.presenzaTimer){ clearInterval(STATE.presenzaTimer); STATE.presenzaTimer = null; } }
@@ -1528,7 +1535,14 @@
   function finalizzaConsegnaForzata(pin){
     if(!SB) return;
     var assigned = effectiveAssignedList(pin);
-    if(!assigned.length) return;
+    if(!assigned.length){
+      // Nessuna fattura assegnata (il docente l'ha tolta): niente da marcare, ma NON devo lasciare l'alunno
+      // incollato su "In consegna…". Chiudo comunque la pratica invece di uscire senza fare nulla.
+      try{ SB.from('fatt_studenti').update({ stato:'consegnato', consegnata:true, fattura_corrente:null }).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
+      if(CLOUD_STUD[pin]){ CLOUD_STUD[pin].stato = 'consegnato'; CLOUD_STUD[pin].consegnata = true; }
+      renderDocente();
+      return;
+    }
     var al = (CLASSE && CLASSE.alunni) ? CLASSE.alunni.find(function(a){ return a.pin === pin; }) : null;
     var nomeCompleto = al ? ((al.cognome||'') + ' ' + (al.nome||'')).trim() : pin;
     var cognome = al ? (al.cognome||'') : '';
@@ -3024,8 +3038,9 @@
     // "Consegnato" pieno: se multiplo → tutte le assegnate consegnate OPPURE lo stato autorevole del cloud
     // dice "consegnato/consegnata" (l'alunno lo mette solo dopo aver consegnato TUTTE): così non resta
     // "Consegnato 2" per un semplice ritardo di rilettura del terzo tentativo. Se singolo → come prima.
-    var allDone = multiplo ? (stato === 'consegnato' || s.consegnata || (assigned.length > 0 && deliv.length >= assigned.length))
-                           : (stato === 'consegnato' || s.consegnata);
+    // Rete di sicurezza (ORA anche per la fattura singola): se il lavoro risulta comunque arrivato in fatt_tentativi
+    // (deliv), è "Consegnato" anche se il 2° salvataggio (stato su fatt_studenti) è fallito per un intoppo di rete.
+    var allDone = (stato === 'consegnato' || s.consegnata || (assigned.length > 0 && deliv.length >= assigned.length));
     // Ha consegnato MA risulta 'bloccato' (sta "bussando" dopo la consegna): resta "Consegnato",
     // ma offro lo SBLOCCO (toglie il blocco SENZA riaprire il lavoro). Dopo lo sblocco torna "Consegnato" + Riammetti.
     if(allDone && stato === 'bloccato') return { cls:'st-done', txt:'Consegnato', done:true, on:false, corso:false, block:true };
@@ -3232,6 +3247,17 @@
     var listaL = parseAssegnazione(g).filter(function(x){ return FATTURE.some(function(f){ return f.id === x.id; }); });
     if(listaL.length){ stopAttesaWatcher(); avviaAlunnoConLista({ lista: listaL, livello: lv, stato: null }); }
   }
+  // Fonde la bozza letta dal cloud con quella già in memoria: per ogni fattura tiene la versione con ts più recente.
+  // Così una lettura in ritardo non calpesta il lavoro appena scritto (vedi bug bozza cross-device).
+  function mergeBozzaCloud(cur, cloud){
+    cur = cur || {};
+    Object.keys(cloud || {}).forEach(function(k){
+      var inc = cloud[k], have = cur[k];
+      var it = (inc && inc.ts) || 0, ht = (have && have.ts) || 0;
+      if(!have || it > ht) cur[k] = inc;
+    });
+    return cur;
+  }
   /* ---------- Menù dell'alunno con PIÙ fatture assegnate ---------- */
   // Avvia l'alunno a partire dal contesto letto dal cloud: se ha 1 sola fattura entra diretto,
   // se ne ha più di una mostra il menù di scelta, se non ne ha nessuna va in attesa.
@@ -3255,7 +3281,10 @@
     try{
       if(pin) SB.from('fatt_studenti').select('bozza_corrente').eq('pin', pin).maybeSingle().then(function(rb){
         var b = (rb && rb.data) ? rb.data.bozza_corrente : null;
-        if(b && typeof b === 'object') STATE.bozzaMappa = b;
+        // FONDERE, non sostituire: se la lettura arriva in ritardo (rete lenta) DOPO che l'alunno ha già scritto,
+        // sostituire in blocco la mappa perderebbe la bozza appena salvata. Per ogni fattura tengo la versione
+        // PIÙ RECENTE (ts) tra quella del cloud e quella già in memoria; così non calpesto quello appena scritto.
+        if(b && typeof b === 'object'){ STATE.bozzaMappa = mergeBozzaCloud(STATE.bozzaMappa || {}, b); }
       }, function(){});
     }catch(e){}
     // Allinea le consegne LOCALI a quelle VERE del cloud, così il menù non mostra "consegnata" fantasma
