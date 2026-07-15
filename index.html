@@ -1160,7 +1160,11 @@
       //     quindi qui non fa mai ombra a una consegna successiva.
       SB.from('fatt_studenti').select('bozza_corrente').eq('pin', pin).maybeSingle().then(function(rb){
         var b = (rb && rb.data) ? rb.data.bozza_corrente : null;
-        if(b && typeof b === 'object' && b[fatturaId]){ cb && cb(b[fatturaId]); return; }
+        if(b && typeof b === 'object' && b[fatturaId]){
+          var e = b[fatturaId];
+          if(typeof e === 'string'){ cb && cb({ html: e, ts: 0 }); return; }        // vecchio formato senza orario
+          if(e && e.html){ cb && cb({ html: e.html, ts: (e.ts || 0) }); return; }    // nuovo formato { html, ts }
+        }
         // (2) Altrimenti l'ultima CONSEGNA (anche riaperta dal Riammetti) conserva il lavoro in risposte.dashboardAlunno.
         SB.from('fatt_tentativi').select('risposte,created_at').eq('pin', pin).eq('fattura_id', fatturaId)
           .neq('modalita', 'compiti').order('created_at', { ascending:false }).limit(5).then(function(res){
@@ -1168,7 +1172,7 @@
           for(var i = 0; i < rows.length; i++){
             var rr = rows[i].risposte || {};
             if(rr.nonSvolta) continue;                       // riga segnaposto «non svolta»: nessun lavoro dentro
-            if(rr.dashboardAlunno){ cb && cb(rr.dashboardAlunno); return; }
+            if(rr.dashboardAlunno){ cb && cb({ html: rr.dashboardAlunno, ts: (rows[i].created_at ? Date.parse(rows[i].created_at) : 0) }); return; }
           }
           cb && cb(null);
         }, function(){ cb && cb(null); });
@@ -1880,7 +1884,7 @@
   }
   // Chiusura della pagina: cancello la presenza SOLO se ero io il proprietario della sessione.
   // (Prima anche il dispositivo respinto lo faceva, e cancellava la presenza di chi stava lavorando.)
-  try{ window.addEventListener('pagehide', function(){ if(STATE.studente) cloudClearPresenzaSeMia(STATE.studente.pin); }); }catch(e){}
+  try{ window.addEventListener('pagehide', function(){ if(STATE.studente){ try{ if(STATE.bozzaCloudTimer){ clearTimeout(STATE.bozzaCloudTimer); STATE.bozzaCloudTimer = null; } pushBozzaCloud(); }catch(e){} cloudClearPresenzaSeMia(STATE.studente.pin); } }); }catch(e){}
   function cloudCollegati(cb){
     if(!SB){ cb && cb([]); return; }
     try{
@@ -3299,41 +3303,45 @@
     resetEditor();
     // Segna l'alunno attivo (per restare sulla sua compilazione dopo un F5)
     // e ripristina l'eventuale lavoro salvato per questa esercitazione.
-    var ripristinato = false;
+    // Recupero del lavoro in corso: tengo SEMPRE la versione PIÙ RECENTE, confrontando la copia LOCALE (su questo
+    // dispositivo) con quella nel CLOUD, ognuna con il suo orario (ts). Così, cambiando dispositivo o rientrando,
+    // non ricompare più una versione vecchia al posto dell'ultima scritta (il caso "Pinco Pallino / merda").
+    var local = null;
     try{
       sessionStorage.setItem('ff_studente_attivo', STATE.studente.pin);
       var raw = localStorage.getItem('ff_lavoro_' + STATE.studente.pin + '_' + STATE.assegnataId);
       if(raw){
         var saved = JSON.parse(raw);
-        if(saved && saved.esercizioId === STATE.assegnataId && saved.html){
-          byId('editor').innerHTML = saved.html;
-          wireEditor();
-          reidrataDinamici();
-          ripristinato = true;
-        }
+        if(saved && saved.esercizioId === STATE.assegnataId && saved.html){ local = { html: saved.html, ts: (saved.ts || 0) }; }
       }
     }catch(e){}
+    var ripristinato = false;
+    if(local){ byId('editor').innerHTML = local.html; wireEditor(); reidrataDinamici(); ripristinato = true; }
     // Livello scelto dal DOCENTE in fase di assegnazione (predefinito Guidata).
     try{ var lvAss = localStorage.getItem('ff_livello'); if(lvAss) LIVELLO = Number(lvAss) || 2; }catch(e){}
     // Applica il livello: compone il testo e imposta le anagrafiche.
     // Se ho ripristinato un lavoro salvato, NON azzero le anagrafiche già compilate.
     applicaLivello(LIVELLO, !ripristinato);
     aggiornaNeretto(); // importi merce in grassetto fin dall'inizio, a ogni livello
-    // Niente lavoro su QUESTO dispositivo? Provo a recuperarlo dal CLOUD (consegna precedente, anche riaperta
-    // dal Riammetti). Così dopo Backup/Ripristino, o entrando da un altro PC giorni dopo, ritrova la sua verifica.
-    if(!ripristinato && !STATE.modalitaCompiti && STATE.studente){
+    // Chiedo SEMPRE al cloud: se lì c'è una versione PIÙ RECENTE del locale (o se qui non c'era niente), la uso.
+    // Così dopo Backup/Ripristino, cambiando PC/cellulare o entrando giorni dopo, ritrova sempre l'ultima verità.
+    if(!STATE.modalitaCompiti && STATE.studente){
       var attesaId = STATE.assegnataId;
-      cloudRecuperaLavoro(STATE.studente.pin, attesaId, function(html){
-        if(!html || !STATE.studente) return;
+      var localTs = local ? local.ts : -1;
+      STATE.userTypedSinceLoad = false;   // azzero: se l'alunno digita DAVVERO prima che il cloud risponda, non lo calpesto
+      cloudRecuperaLavoro(STATE.studente.pin, attesaId, function(res){
+        if(!res || !res.html || !STATE.studente) return;
         if(STATE.assegnataId !== attesaId) return;              // nel frattempo ha cambiato fattura
         if(STATE.consegnata) return;                            // ha già consegnato: non toccare
         if(byId('editor').style.display === 'none') return;     // non è più nell'editor
-        byId('editor').innerHTML = html;
+        if(res.ts <= localTs) return;                           // il locale è uguale o più fresco → tengo il locale
+        if(STATE.userTypedSinceLoad) return;                    // l'alunno ha già iniziato a digitare → non calpesto
+        byId('editor').innerHTML = res.html;
         wireEditor();
         reidrataDinamici();
         applicaLivello(LIVELLO, false);                         // NON azzerare le anagrafiche recuperate
         aggiornaNeretto();
-        try{ salvaLavoro(); }catch(e){}                         // da ora ce l'ha anche in locale
+        try{ salvaLavoro(); }catch(e){}                         // allineo il locale alla versione più fresca
       });
     }
     var top = byId('topbar-info'); top.innerHTML = '';
@@ -3502,14 +3510,16 @@
       var ed = byId('editor');
       if(!ed || ed.classList.contains('sol-mode')) return;
       commitValues(ed);
-      localStorage.setItem('ff_lavoro_' + STATE.studente.pin + '_' + STATE.assegnataId, JSON.stringify({ esercizioId: STATE.assegnataId, html: ed.innerHTML }));
+      var ora = Date.now();
+      localStorage.setItem('ff_lavoro_' + STATE.studente.pin + '_' + STATE.assegnataId, JSON.stringify({ esercizioId: STATE.assegnataId, html: ed.innerHTML, ts: ora }));
       // Congelamento del tempo: il lavoro in corso di VERIFICA va anche nel cloud, con un piccolo ritardo
-      // (accorpa le raffiche di battitura, niente tempesta di scritture). Backup/ripristino se lo portano dietro.
+      // (accorpa le raffiche di battitura). Ogni versione porta un ORARIO (ts): al rientro vince la PIÙ RECENTE
+      // fra locale e cloud, così cambiando dispositivo non ricompare più il vecchio al posto dell'ultima scritta.
       if(!STATE.modalitaCompiti && STATE.proprietario && STATE.assegnataId){
         STATE.bozzaMappa = STATE.bozzaMappa || {};
-        STATE.bozzaMappa[STATE.assegnataId] = ed.innerHTML;
+        STATE.bozzaMappa[STATE.assegnataId] = { html: ed.innerHTML, ts: ora };
         if(STATE.bozzaCloudTimer) clearTimeout(STATE.bozzaCloudTimer);
-        STATE.bozzaCloudTimer = setTimeout(pushBozzaCloud, 4000);
+        STATE.bozzaCloudTimer = setTimeout(pushBozzaCloud, 1500);
       }
     }catch(e){}
   }
@@ -4361,7 +4371,9 @@
   // con debounce, così NON viene duplicato dalle chiamate a wireEditor().
   (function(){
     var saveTimer = null;
-    byId('editor').addEventListener('input', function(){
+    byId('editor').addEventListener('input', function(e){
+      if(e && e.isTrusted) STATE.userTypedSinceLoad = true;   // SOLO digitazione VERA dell'alunno (le modifiche
+                                                              // automatiche dell'editor hanno isTrusted=false)
       if(saveTimer) clearTimeout(saveTimer);
       saveTimer = setTimeout(salvaLavoro, 600);
     });
