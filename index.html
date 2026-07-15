@@ -1078,7 +1078,7 @@
     var done = consegnateLocali(pin);
     lista.forEach(function(x){
       if(done.indexOf(x.id) !== -1) return;                                  // già consegnata davvero
-      var raw = null; try{ raw = localStorage.getItem('ff_lavoro_' + pin + '_' + x.id); }catch(e){}
+      var raw = null; try{ raw = localStorage.getItem(chiaveLavoro(pin, x.id)); }catch(e){}
       if(!raw) return;                                                       // mai aperta/nessun lavoro → la marca il docente
       try{ catturaFatturaPerForzata(x); }catch(e){}
     });
@@ -1101,7 +1101,7 @@
     resetEditor();
     var ripristinato = false;
     try{
-      var raw = localStorage.getItem('ff_lavoro_' + STATE.studente.pin + '_' + x.id);
+      var raw = localStorage.getItem(chiaveLavoro(STATE.studente.pin, x.id));
       if(raw){ var saved = JSON.parse(raw); if(saved && saved.esercizioId === x.id && saved.html){ byId('editor').innerHTML = saved.html; wireEditor(); reidrataDinamici(); ripristinato = true; } }
     }catch(e){}
     applicaLivello(LIVELLO, !ripristinato); // se ho ripristinato il lavoro, NON azzero le anagrafiche già compilate
@@ -1445,7 +1445,7 @@
       closeModal(ov); STATE.assModaleAperta = false;
       // Accetta: butta via il lavoro delle fatture rimosse (che aveva iniziato) e adotta la nuova assegnazione.
       rimosse.forEach(function(x){
-        try{ if(pin) localStorage.removeItem('ff_lavoro_' + pin + '_' + x.id); }catch(e){}
+        try{ if(pin) localStorage.removeItem(chiaveLavoro(pin, x.id)); }catch(e){}
         rimuoviIniziata(pin, x.id); rimuoviConsegnataLocale(pin, x.id);
       });
       STATE.mieAssegnate = nuova; STATE.multiMode = nuova.length > 1;
@@ -3197,6 +3197,7 @@
     // schermata di blocco). Da questo momento questo dispositivo è il PROPRIETARIO della sessione: è l'unico
     // autorizzato a scrivere e cancellare la presenza di questo PIN.
     STATE.proprietario = true;
+    STATE.modalitaCompiti = false;   // entrata in VERIFICA: la chiave del lavoro locale dev'essere quella verifica, non compiti
     // Carico la bozza in corso già nel cloud PRIMA che l'alunno ricominci a scrivere: così, se ha più fatture
     // abbozzate, salvandone una non cancella le altre (la mappa parte piena, non da zero).
     STATE.bozzaMappa = {};
@@ -3309,7 +3310,7 @@
     var local = null;
     try{
       sessionStorage.setItem('ff_studente_attivo', STATE.studente.pin);
-      var raw = localStorage.getItem('ff_lavoro_' + STATE.studente.pin + '_' + STATE.assegnataId);
+      var raw = localStorage.getItem(chiaveLavoro(STATE.studente.pin, STATE.assegnataId));
       if(raw){
         var saved = JSON.parse(raw);
         if(saved && saved.esercizioId === STATE.assegnataId && saved.html){ local = { html: saved.html, ts: (saved.ts || 0) }; }
@@ -3497,6 +3498,9 @@
   // PROPRIETARIO della sessione scrive, e solo per le VERIFICHE (i compiti a casa sono un'altra cosa e non
   // devono finire qui, altrimenti precompilerebbero la verifica). È questo che rende il backup un backup VERO:
   // il lavoro non consegnato smette di vivere solo nel dispositivo dell'alunno e diventa recuperabile.
+  // Chiave del salvataggio LOCALE del lavoro: DIVERSA per compiti e verifiche, così un compito fatto a casa
+  // NON precompila la verifica sulla stessa fattura sullo stesso dispositivo. Compiti: ff_lavoroC_ ; verifiche: ff_lavoro_.
+  function chiaveLavoro(pin, id){ return 'ff_lavoro' + (STATE.modalitaCompiti ? 'C' : '') + '_' + pin + '_' + id; }
   function pushBozzaCloud(){
     if(!SB || !STATE.studente || !STATE.proprietario || STATE.modalitaCompiti) return;
     try{
@@ -3511,7 +3515,7 @@
       if(!ed || ed.classList.contains('sol-mode')) return;
       commitValues(ed);
       var ora = Date.now();
-      localStorage.setItem('ff_lavoro_' + STATE.studente.pin + '_' + STATE.assegnataId, JSON.stringify({ esercizioId: STATE.assegnataId, html: ed.innerHTML, ts: ora }));
+      localStorage.setItem(chiaveLavoro(STATE.studente.pin, STATE.assegnataId), JSON.stringify({ esercizioId: STATE.assegnataId, html: ed.innerHTML, ts: ora }));
       // Congelamento del tempo: il lavoro in corso di VERIFICA va anche nel cloud, con un piccolo ritardo
       // (accorpa le raffiche di battitura). Ogni versione porta un ORARIO (ts): al rientro vince la PIÙ RECENTE
       // fra locale e cloud, così cambiando dispositivo non ricompare più il vecchio al posto dell'ultima scritta.
