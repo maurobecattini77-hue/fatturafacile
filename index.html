@@ -1036,16 +1036,23 @@
     show('blocco');
   }
   /* Cattura e salva nel cloud la consegna della fattura CORRENTE (senza mostrare viste). */
-  function catturaConsegnaCorrente(){
-    if(!STATE.studente || !STATE.assegnataId) return;
-    if(!STATE.modalitaCompiti) aggiungiConsegnataLocale(STATE.studente.pin, STATE.assegnataId); // in compiti la "verità" è il cloud (modalita='compiti'), niente marker verifica
-    commitValues(byId('editor'));
+  function catturaConsegnaCorrente(cb){
+    if(!STATE.studente || !STATE.assegnataId){ if(cb) cb(false); return; }
+    var pin = STATE.studente.pin, id = STATE.assegnataId, compiti = STATE.modalitaCompiti; // fisso ORA (l'esito del cloud arriva dopo)
+    // Metto al sicuro l'ultimissimo lavoro in locale PRIMA di bloccare l'editor: se il cloud fallisce, al rientro
+    // (entraAlunnoView / apriCompito) l'alunno ritrova esattamente quello che aveva scritto e può riprovare.
+    try{ commitValues(byId('editor')); localStorage.setItem(chiaveLavoro(pin, id), JSON.stringify({ esercizioId:id, html: byId('editor').innerHTML, ts: Date.now() })); }catch(e){}
     lockEditor();
     STATE.myDashboardHTML = byId('editor').innerHTML;
     STATE.myCortesiaHTML = buildCortesia(raccogli());
     STATE.correctCortesiaHTML = buildCortesia(STATE.soluzioneCorrente);
     try{ mostraSoluzioneCompilatore(); commitValues(byId('editor')); STATE.correctDashboardHTML = byId('editor').innerHTML; }catch(e){ STATE.correctDashboardHTML = ''; }
-    cloudSalvaConsegna();
+    cloudSalvaConsegna(function(ok){
+      // Il marker locale "consegnata" (solo verifiche) si mette SOLO se il cloud ha confermato: così una consegna
+      // fallita non risulta "già consegnata" (che farebbe saltare la ri-cattura nella consegna forzata).
+      if(ok && !compiti){ try{ aggiungiConsegnataLocale(pin, id); }catch(e){} }
+      if(cb) cb(ok);
+    });
     // NON cancello il lavoro salvato (chiave per fattura): se il docente la riammette, l'alunno lo ritrova
     // e può ricontrollare/riconsegnare. Viene ripulito al cambio classe / Reset (gestore 'storage').
   }
@@ -1619,8 +1626,8 @@
     }, 3000);
   }
   /* ---------- Consegne: salvataggio + Esporta HTML + Backup/Ripristina ---------- */
-  function cloudSalvaConsegna(){
-    if(!SB || !STATE.studente) return;
+  function cloudSalvaConsegna(cb){
+    if(!SB || !STATE.studente){ if(cb) cb(false); return; }
     var payload = {
       pin: STATE.studente.pin,
       // La classe è quella DELL'ALUNNO, non quella caricata su questo dispositivo. Prima si prendeva da CLASSE:
@@ -1642,15 +1649,24 @@
         data: new Date().toISOString()
       }
     };
-    try{ SB.from('fatt_tentativi').insert(payload).then(function(){}, function(){}); }catch(e){}
-    // Consegnata: tolgo QUESTA fattura dalla bozza in corso. Il lavoro ora vive nella consegna (fatt_tentativi),
-    // e così il recupero al rientro non ripesca una vecchia bozza al posto della consegna appena fatta.
-    try{
-      if(STATE.bozzaMappa && STATE.assegnataId && STATE.bozzaMappa[STATE.assegnataId]){
-        delete STATE.bozzaMappa[STATE.assegnataId];
-        pushBozzaCloud();
+    // CONSEGNA A PROVA DI RETE: aspetto la risposta del cloud e la riferisco a chi ha chiamato (cb(ok)).
+    // La bozza di sicurezza viene tolta SOLO se l'insert è andato davvero a buon fine: se la rete fallisce,
+    // il lavoro resta recuperabile (bozza cloud + copia locale) e l'alunno può riprovare. Prima invece si
+    // ignorava l'esito e si cancellava comunque la bozza → col wifi ballerino il lavoro spariva in silenzio.
+    var delId = STATE.assegnataId;          // fisso l'id ORA (nella consegna forzata STATE.assegnataId cambia mentre gli insert sono in volo)
+    var done = false;
+    var finish = function(ok){
+      if(done) return; done = true;
+      if(ok){
+        try{
+          if(STATE.bozzaMappa && delId && STATE.bozzaMappa[delId]){ delete STATE.bozzaMappa[delId]; pushBozzaCloud(); }
+        }catch(e){}
       }
-    }catch(e){}
+      if(cb) cb(ok);
+    };
+    try{
+      SB.from('fatt_tentativi').insert(payload).then(function(res){ finish(!(res && res.error)); }, function(){ finish(false); });
+    }catch(e){ finish(false); }
   }
   function ff_pad(n){ return (n<10?'0':'') + n; }
   function ff_dateStamp(){ var d=new Date(); return d.getFullYear()+ff_pad(d.getMonth()+1)+ff_pad(d.getDate())+'_'+ff_pad(d.getHours())+ff_pad(d.getMinutes()); }
@@ -4026,10 +4042,21 @@
   function consegnaCompito(){
     if(STATE.consegnata) return;
     showConfirm('Vuoi consegnare questa fattura al prof? Dopo la consegna vedrai la soluzione e potrai stamparla, ma non potrai più modificarla.', function(){
+      try{ salvaLavoro(); }catch(e){}
       STATE.consegnata = true;
-      catturaConsegnaCorrente(); // cattura myDashboard/myCortesia/correct* + salva nel cloud
-      if(STATE.compitiDone && STATE.compitiDone.indexOf(STATE.assegnataId) === -1) STATE.compitiDone.push(STATE.assegnataId);
-      mostraSoluzioneCompiti();
+      mostraBloccoMsg('⏳', 'Invio in corso…', 'Sto inviando il tuo compito. Un attimo, non chiudere la pagina…', '#254a86');
+      catturaConsegnaCorrente(function(ok){
+        if(!ok){
+          // Consegna compito NON arrivata al cloud: non dico "consegnato", riporto l'alunno a compilare (lavoro intatto).
+          STATE.consegnata = false;
+          var f = FATTURE.find(function(x){ return x.id === STATE.assegnataId; });
+          if(f){ apriCompito(f); } else { renderCompitiPicker(); show('menu-fatture'); }
+          showAlert('Consegna non riuscita: controlla la connessione e riprova. Tranquillo, il tuo lavoro è al sicuro.');
+          return;
+        }
+        if(STATE.compitiDone && STATE.compitiDone.indexOf(STATE.assegnataId) === -1) STATE.compitiDone.push(STATE.assegnataId);
+        mostraSoluzioneCompiti();
+      });
     });
   }
   // Rivedere la soluzione di un compito GIÀ consegnato (dalla maschera).
@@ -4395,24 +4422,34 @@
       ? 'Vuoi consegnare questa fattura? Una volta consegnata non potrai più modificarla né vedere le soluzioni.'
       : 'Vuoi consegnare l\'esercitazione? Una volta consegnata non potrai più modificarla né vedere le soluzioni.';
     showConfirm(msgCons, function(){
+      try{ salvaLavoro(); }catch(e){}                 // metto al sicuro l'ultimo tasto PRIMA di segnare consegnata (poi salvaLavoro si blocca)
       STATE.consegnata = true;
-      catturaConsegnaCorrente(); // cattura + salva nel cloud la fattura corrente (e la segna consegnata in locale)
-      var tutteFatte = multiTutteConsegnate();
-      // Nel cloud: "consegnato" SOLO quando l'alunno ha finito TUTTE le fatture assegnate; altrimenti "in_corso".
-      if(SB && STATE.studente){
-        try{ SB.from('fatt_studenti').update({ ultimo_accesso:new Date().toISOString(), fattura_corrente:null, consegnata:tutteFatte, stato:(tutteFatte?'consegnato':'in_corso') }).eq('pin', STATE.studente.pin).then(function(){}, function(){}); }catch(e){}
-        if(CLOUD_STUD[STATE.studente.pin]){ CLOUD_STUD[STATE.studente.pin].consegnata = tutteFatte; CLOUD_STUD[STATE.studente.pin].stato = (tutteFatte?'consegnato':'in_corso'); }
-      }
-      try{ if(tutteFatte && STATE.studente) sessionStorage.removeItem('ff_studente_attivo'); }catch(e){}
-      // VERIFICA: la consegna è DEFINITIVA e SENZA feedback. Non mostriamo MAI la soluzione all'alunno
-      // (né cortesia corretta, né dashboard corretta). Le soluzioni restano salvate nel cloud per l'export docente.
-      if(tutteFatte){
-        stopAssegnazioneWatcher(); stopConsegnaWatcher(); stopPresenza();
-        mostraBloccoMsg('✅', 'Verifica consegnata', 'Hai consegnato la verifica: non puoi più modificarla e le soluzioni non sono visibili. Se il docente ti riammette, potrai rientrare.', '#2f7d54');
-        startBloccoWatcher();
-      } else {
-        mostraMenuFatture(); // restano fatture da fare → torna al menù (nessuna soluzione mostrata)
-      }
+      mostraBloccoMsg('⏳', 'Invio in corso…', 'Sto inviando la tua consegna. Un attimo, non chiudere la pagina…', '#254a86');
+      catturaConsegnaCorrente(function(ok){
+        if(!ok){
+          // Consegna NON arrivata al cloud: non blocco, non dico "consegnata". Riporto l'alunno sul suo lavoro (intatto) e lo faccio riprovare.
+          STATE.consegnata = false;
+          entraAlunnoView();
+          showAlert('Consegna non riuscita: controlla la connessione e premi di nuovo «Chiudi e consegna». Tranquillo, il tuo lavoro è al sicuro, non è andato perso.');
+          return;
+        }
+        var tutteFatte = multiTutteConsegnate();
+        // Nel cloud: "consegnato" SOLO quando l'alunno ha finito TUTTE le fatture assegnate; altrimenti "in_corso".
+        if(SB && STATE.studente){
+          try{ SB.from('fatt_studenti').update({ ultimo_accesso:new Date().toISOString(), fattura_corrente:null, consegnata:tutteFatte, stato:(tutteFatte?'consegnato':'in_corso') }).eq('pin', STATE.studente.pin).then(function(){}, function(){}); }catch(e){}
+          if(CLOUD_STUD[STATE.studente.pin]){ CLOUD_STUD[STATE.studente.pin].consegnata = tutteFatte; CLOUD_STUD[STATE.studente.pin].stato = (tutteFatte?'consegnato':'in_corso'); }
+        }
+        try{ if(tutteFatte && STATE.studente) sessionStorage.removeItem('ff_studente_attivo'); }catch(e){}
+        // VERIFICA: la consegna è DEFINITIVA e SENZA feedback. Non mostriamo MAI la soluzione all'alunno
+        // (né cortesia corretta, né dashboard corretta). Le soluzioni restano salvate nel cloud per l'export docente.
+        if(tutteFatte){
+          stopAssegnazioneWatcher(); stopConsegnaWatcher(); stopPresenza();
+          mostraBloccoMsg('✅', 'Verifica consegnata', 'Hai consegnato la verifica: non puoi più modificarla e le soluzioni non sono visibili. Se il docente ti riammette, potrai rientrare.', '#2f7d54');
+          startBloccoWatcher();
+        } else {
+          mostraMenuFatture(); // restano fatture da fare → torna al menù (nessuna soluzione mostrata)
+        }
+      });
     });
   });
   document.addEventListener('mousedown', function(e){ if(!e.target.closest('.ana-search-wrap')){ document.querySelectorAll('.ana-dd').forEach(function(d){ d.classList.remove('open'); }); } });
