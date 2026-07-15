@@ -1062,11 +1062,16 @@
   // premuto "Consegna" su ognuna. Le fatture mai aperte le lascerà il docente come «non svolta» (finalizza).
   function consegnaForzataLocale(){
     if(STATE.consegnata) return;
+    var pin = STATE.studente ? STATE.studente.pin : '';
+    // FLUSH DEGLI ULTIMI TASTI — DEVE STARE QUI, PRIMA DELLA GUARDIA.
+    // salvaLavoro() si autoblocca se STATE.consegnata è già true: metterlo dopo lo rendeva CODICE MORTO,
+    // e la consegna forzata partiva senza le ultime modifiche (il cliente appena scelto dalla rubrica,
+    // la riga articolo appena aggiunta, lo sconto, gli ultimi caratteri digitati). L'alunno consegnava
+    // una fattura AMPUTATA e prendeva un voto su quella. Era il bug più subdolo dell'app.
+    try{ if(byId('editor').style.display !== 'none') salvaLavoro(); }catch(e){}
     STATE.consegnata = true;         // guardia: niente doppie catture né ri-blocco
     stopConsegnaWatcher();
-    var pin = STATE.studente ? STATE.studente.pin : '';
     if(!pin || !SB){ bloccaPerConsegnaDocente(); return; }
-    try{ salvaLavoro(); }catch(e){}  // flush della fattura aperta su ff_lavoro (ultimi tasti)
     var lista = (STATE.mieAssegnate && STATE.mieAssegnate.length)
                   ? STATE.mieAssegnate.slice()
                   : (STATE.assegnataId ? [{ id:STATE.assegnataId, liv:(typeof LIVELLO!=='undefined'?LIVELLO:2) }] : []);
@@ -1149,15 +1154,24 @@
   function cloudRecuperaLavoro(pin, fatturaId, cb){
     if(!SB || !pin || !fatturaId){ cb && cb(null); return; }
     try{
-      SB.from('fatt_tentativi').select('risposte,created_at').eq('pin', pin).eq('fattura_id', fatturaId)
-        .neq('modalita', 'compiti').order('created_at', { ascending:false }).limit(5).then(function(res){
-        var rows = (res && res.data) ? res.data : [];
-        for(var i = 0; i < rows.length; i++){
-          var rr = rows[i].risposte || {};
-          if(rr.nonSvolta) continue;                       // riga segnaposto «non svolta»: nessun lavoro dentro
-          if(rr.dashboardAlunno){ cb && cb(rr.dashboardAlunno); return; }
-        }
-        cb && cb(null);
+      // (1) Prima la BOZZA IN CORSO: il lavoro NON ancora consegnato, salvato in continuo nel cloud mentre
+      //     l'alunno scrive (mappa { fatturaId: html }). È il più fresco e l'unico che sopravvive a
+      //     Backup/Ripristino di una verifica interrotta a metà. Alla consegna questa voce viene tolta,
+      //     quindi qui non fa mai ombra a una consegna successiva.
+      SB.from('fatt_studenti').select('bozza_corrente').eq('pin', pin).maybeSingle().then(function(rb){
+        var b = (rb && rb.data) ? rb.data.bozza_corrente : null;
+        if(b && typeof b === 'object' && b[fatturaId]){ cb && cb(b[fatturaId]); return; }
+        // (2) Altrimenti l'ultima CONSEGNA (anche riaperta dal Riammetti) conserva il lavoro in risposte.dashboardAlunno.
+        SB.from('fatt_tentativi').select('risposte,created_at').eq('pin', pin).eq('fattura_id', fatturaId)
+          .neq('modalita', 'compiti').order('created_at', { ascending:false }).limit(5).then(function(res){
+          var rows = (res && res.data) ? res.data : [];
+          for(var i = 0; i < rows.length; i++){
+            var rr = rows[i].risposte || {};
+            if(rr.nonSvolta) continue;                       // riga segnaposto «non svolta»: nessun lavoro dentro
+            if(rr.dashboardAlunno){ cb && cb(rr.dashboardAlunno); return; }
+          }
+          cb && cb(null);
+        }, function(){ cb && cb(null); });
       }, function(){ cb && cb(null); });
     }catch(e){ cb && cb(null); }
   }
@@ -1165,8 +1179,16 @@
     if(!SB) return;
     try{ SB.from('fatt_config').update({ assegnata_id:id||null, livello:(liv!=null?String(liv):null), updated_at:new Date().toISOString() }).eq('id', 1).then(function(){}, function(){}); }catch(e){}
   }
+  /* ---------- PROPRIETÀ DELLA SESSIONE ----------
+     STATE.proprietario è true SOLO sul dispositivo che è stato davvero ammesso a lavorare con quella PIN
+     (lo mette avviaAlunnoConLista, dove arriva solo chi ha passato il controllo d'accesso).
+     Il dispositivo RESPINTO (il compagno "furbo" che prova col PIN di un altro) ha comunque STATE.studente
+     impostato: senza questa guardia, quando chiudeva la pagina o premeva «Esci», CANCELLAVA LA PRESENZA
+     del proprietario che stava lavorando. Il vero Mario spariva dalla dashboard come «Non collegato» e la
+     «Consegna classe» lo saltava: il suo lavoro non veniva catturato. Il tentativo del furbo danneggiava
+     la vittima — l'esatto contrario di quello che deve fare l'anti-doppio-accesso. */
   function cloudPresenza(){
-    if(!SB || !STATE.studente) return;
+    if(!SB || !STATE.studente || !STATE.proprietario) return;   // se non sei il proprietario, non scrivi
     try{
       SB.from('fatt_studenti').update({
         ultimo_accesso:new Date().toISOString(),
@@ -1178,13 +1200,19 @@
   }
   function startPresenza(){ stopPresenza(); cloudPresenza(); STATE.presenzaTimer = setInterval(cloudPresenza, 30000); }
   function stopPresenza(){ if(STATE.presenzaTimer){ clearInterval(STATE.presenzaTimer); STATE.presenzaTimer = null; } }
+  // Cancella la presenza SOLO se questo dispositivo possiede davvero la sessione. Chi è stato respinto
+  // non deve poter toccare la presenza di nessuno.
+  function cloudClearPresenzaSeMia(pin){
+    if(!STATE.proprietario) return;
+    cloudClearPresenza(pin);
+  }
   function cloudClearPresenza(pin){
     if(!SB || !pin) return;
     try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null }).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
   }
   function cloudResetPresenze(){
     if(!SB) return;
-    try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false }).gte('pin', '').then(function(){}, function(){}); }catch(e){}
+    try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false, bozza_corrente:null }).gte('pin', '').then(function(){}, function(){}); }catch(e){}
     try{ SB.from('fatt_config').update({ assegnata_id:null, livello:null }).eq('id', 1).then(function(){}, function(){}); }catch(e){}
     try{ SB.from('fatt_tentativi').delete().neq('modalita', 'compiti').gte('created_at', '2000-01-01').then(function(){}, function(){}); }catch(e){} // il Reset NON tocca l'archivio compiti a casa
   }
@@ -1195,7 +1223,7 @@
   // cancella le consegne). I voti si azzerano SOLO ricaricando la classe (Carica classe = nuova verifica).
   function cloudResetClasse(classe){
     if(!SB || !classe) return;
-    try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false }).eq('classe', classe).then(function(){}, function(){}); }catch(e){}
+    try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false, bozza_corrente:null }).eq('classe', classe).then(function(){}, function(){}); }catch(e){}
     try{ SB.from('fatt_tentativi').delete().eq('classe', classe).neq('modalita', 'compiti').then(function(){}, function(){}); }catch(e){}
     (CLASSE && CLASSE.alunni ? CLASSE.alunni : []).forEach(function(a){
       if(CLOUD_STUD[a.pin]){ var s = CLOUD_STUD[a.pin]; s.stato='non_iniziato'; s.consegnata=false; s.riammesso=false; s.ultimo_accesso=null; s.fattura_assegnata=null; s.livello_assegnato=null; s.fattura_corrente=null; }
@@ -1507,7 +1535,8 @@
           }
           var f = (typeof FATTURE!=='undefined') ? FATTURE.find(function(y){ return y.id === x.id; }) : null;
           var cortCorr = ''; try{ if(f) cortCorr = buildCortesia(f.soluzione); }catch(e){}
-          try{ SB.from('fatt_tentativi').insert({ pin:pin, classe:(CLASSE&&CLASSE.classe)||'', fattura_id:x.id, modalita:'forzata', completato:true,
+          // anche qui: la classe è quella dell'ALUNNO (dal cloud), non quella attiva sul mio schermo
+          try{ SB.from('fatt_tentativi').insert({ pin:pin, classe:((CLOUD_STUD[pin]&&CLOUD_STUD[pin].classe)||(CLASSE&&CLASSE.classe)||''), fattura_id:x.id, modalita:'forzata', completato:true,
             risposte:{ titolo:(f?f.titolo:x.id), nome:nomeCompleto, cognome:cognome, nonSvolta:true, cortesiaAlunno:'', cortesiaCorretta:cortCorr, dashboardAlunno:'', dashboardCorretta:'', data:new Date().toISOString() } }).then(function(){}, function(){}); }catch(e){}
           CLOUD_CONS[pin] = CLOUD_CONS[pin] || {}; CLOUD_CONS[pin][x.id] = true;
         });
@@ -1532,8 +1561,18 @@
   function startBloccoWatcher(){
     stopBloccoWatcher();
     if(!SB) return;
+    // SCADENZA. Prima questo sorvegliante era IMMORTALE: una scheda «Accesso bloccato» lasciata aperta ieri
+    // continuava a interrogare il cloud all'infinito e, la lezione dopo, poteva marcare «Bloccato» un alunno
+    // che stava lavorando tranquillo. Ora dopo un'ora si arrende e chiede di ricaricare la pagina.
+    var nato = Date.now();
+    var VITA_MAX = 60 * 60 * 1000;
     STATE.bloccoTimer = setInterval(function(){
       if(!STATE.studente){ stopBloccoWatcher(); return; }
+      if(Date.now() - nato > VITA_MAX){
+        stopBloccoWatcher();
+        mostraBloccoMsg('⏳', 'Sessione scaduta', 'Questa pagina è rimasta aperta troppo a lungo. Ricaricala e rientra col tuo PIN.', '#8a6d3b');
+        return;
+      }
       var pin = STATE.studente.pin;
       if(STATE.sbloccoInCorso) return;
       SB.from('fatt_studenti').select('stato,riammesso,ultimo_accesso,consegnata').eq('pin', pin).maybeSingle().then(function(res){
@@ -1575,7 +1614,11 @@
     if(!SB || !STATE.studente) return;
     var payload = {
       pin: STATE.studente.pin,
-      classe: (CLASSE && CLASSE.classe) || '',
+      // La classe è quella DELL'ALUNNO, non quella caricata su questo dispositivo. Prima si prendeva da CLASSE:
+      // se un alunno della 3B entrava su un PC dove il docente aveva caricato la 3A, la sua consegna veniva
+      // timbrata «3A» — e da lì: il Reset della 3B non la cancellava, l'export della 3B non la trovava, il suo
+      // compito finiva nella cartella della 3A. Era la radice di cinque bug diversi.
+      classe: (STATE.studente.classe || (CLASSE && CLASSE.classe) || ''),
       fattura_id: STATE.assegnataId || '',
       modalita: (STATE.modalitaCompiti ? 'compiti' : 'allenamento'),
       completato: true,
@@ -1591,6 +1634,14 @@
       }
     };
     try{ SB.from('fatt_tentativi').insert(payload).then(function(){}, function(){}); }catch(e){}
+    // Consegnata: tolgo QUESTA fattura dalla bozza in corso. Il lavoro ora vive nella consegna (fatt_tentativi),
+    // e così il recupero al rientro non ripesca una vecchia bozza al posto della consegna appena fatta.
+    try{
+      if(STATE.bozzaMappa && STATE.assegnataId && STATE.bozzaMappa[STATE.assegnataId]){
+        delete STATE.bozzaMappa[STATE.assegnataId];
+        pushBozzaCloud();
+      }
+    }catch(e){}
   }
   function ff_pad(n){ return (n<10?'0':'') + n; }
   function ff_dateStamp(){ var d=new Date(); return d.getFullYear()+ff_pad(d.getMonth()+1)+ff_pad(d.getDate())+'_'+ff_pad(d.getHours())+ff_pad(d.getMinutes()); }
@@ -1633,6 +1684,7 @@
   }
   function esportaHTML(){
     if(!SB){ showAlert('Cloud non disponibile.'); return; }
+    if(!(CLASSE && CLASSE.alunni && CLASSE.alunni.length)){ showAlert('Seleziona prima la classe da esportare.'); return; }
     // SOLO le consegne di VERIFICA: i compiti a casa hanno il loro export («Archivio compiti») e non devono
     // finire qui, altrimenti nel compito d'esame comparirebbe il lavoro fatto a casa.
     SB.from('fatt_tentativi').select('pin,fattura_id,risposte,created_at').eq('completato', true).neq('modalita', 'compiti').order('created_at', {ascending:true}).then(function(res){
@@ -1644,9 +1696,15 @@
         // Anti-race: una consegna VERA (nonSvolta=false) non viene mai sovrascritta da una «non svolta» arrivata dopo.
         var cur = byPin[r.pin][r.fattura_id]; if(cur && !cur.nonSvolta && rr.nonSvolta) return;
         byPin[r.pin][r.fattura_id] = { titolo:(rr.titolo||r.fattura_id||''), nonSvolta:(rr.nonSvolta||false), cortesiaAlunno:(rr.cortesiaAlunno||''), cortesiaCorretta:(rr.cortesiaCorretta||''), dashboardAlunno:(rr.dashboardAlunno||''), dashboardCorretta:(rr.dashboardCorretta||''), cognome:(rr.cognome||''), nome:(rr.nome||'') }; });
+      // SOLO gli alunni della CLASSE ATTIVA. Prima l'export ciclava su tutti gli alunni del cloud: nel file
+      // intitolato «Classe 3B» finivano dentro anche quelli della 3A. Filtro sul REGISTRO della classe (non sul
+      // campo 'classe' della riga, che può essere stato timbrato male dal dispositivo dell'alunno).
+      var pinsClasse = {};
+      ((CLASSE && CLASSE.alunni) ? CLASSE.alunni : []).forEach(function(a){ pinsClasse[a.pin] = true; });
       // Includi SOLO gli alunni che hanno consegnato TUTTE le fatture a loro assegnate; una riga a testa.
       var data = [];
       Object.keys(byPin).forEach(function(pin){
+        if(!pinsClasse[pin]) return;              // non è di questa classe → fuori
         var assigned = effectiveAssignedList(pin);
         if(!assigned.length) return;
         var cons = byPin[pin];
@@ -1671,10 +1729,13 @@
   // senza il vincolo dell'assegnazione (nei compiti l'alunno sceglie da sé quali fare).
   function esportaCompitiHTML(classe){
     if(!SB){ showAlert('Cloud non disponibile.'); return; }
-    var q = SB.from('fatt_tentativi').select('pin,fattura_id,risposte,created_at').eq('modalita', 'compiti').eq('completato', true);
-    if(classe && classe !== '—') q = q.eq('classe', classe);
+    var senzaClasse = (!classe || classe === '—');
+    var q = SB.from('fatt_tentativi').select('pin,classe,fattura_id,risposte,created_at').eq('modalita', 'compiti').eq('completato', true);
+    // Ogni cartella esporta SOLO il proprio contenuto: «Senza classe» non deve tirar dentro le altre classi.
+    if(!senzaClasse) q = q.eq('classe', classe);
     q.order('created_at', {ascending:true}).then(function(res){
       var rows = (res && res.data) ? res.data : [];
+      if(senzaClasse) rows = rows.filter(function(r){ return !r.classe; });
       if(!rows.length){ showAlert('Nessun compito da esportare.'); return; }
       var byPin = {};
       rows.forEach(function(r){ var rr=r.risposte||{}; if(!byPin[r.pin]) byPin[r.pin]={ nome:(rr.nome||r.pin), cognome:(rr.cognome||''), items:{} }; byPin[r.pin].items[r.fattura_id] = { titolo:(rr.titolo||r.fattura_id||''), cortesiaAlunno:(rr.cortesiaAlunno||''), cortesiaCorretta:(rr.cortesiaCorretta||''), dashboardAlunno:(rr.dashboardAlunno||''), dashboardCorretta:(rr.dashboardCorretta||'') }; });
@@ -1686,7 +1747,9 @@
         data.push({ pin:pin, nome:s.nome, cognome:s.cognome, nums:fatture.map(function(f){ return f.num; }).join(' · '), fatture:fatture });
       });
       data.sort(function(a,b){ return (a.cognome||a.nome).localeCompare((b.cognome||b.nome), 'it'); });
-      buildExportDoc(data, (classe && classe !== '—') ? classe : ((CLASSE&&CLASSE.classe)||''), 'Compiti a casa', 'compiti');
+      // Il titolo del file dice la verità: se sto esportando «Senza classe», non spaccio i compiti
+      // per quelli della classe attiva (prima ci scriveva il nome della classe sbagliata).
+      buildExportDoc(data, senzaClasse ? '' : classe, 'Compiti a casa', 'compiti');
     }, function(){ showAlert('Errore nel recupero dei compiti.'); });
   }
   // BACKUP DELLA SOLA CLASSE ATTIVA (versione 2). Nel file finiscono SOLO i suoi alunni e le SUE consegne,
@@ -1728,56 +1791,96 @@
     // Backup VECCHIO (conteneva tutte le classi): tengo solo gli alunni della classe del file, per non
     // ribaltare le altre classi con dati ormai sorpassati.
     var studenti = v2 ? j.studenti : j.studenti.filter(function(s){ return (s.classe || '') === classe; });
-    var pins = {}; studenti.forEach(function(s){ pins[s.pin] = true; });
-    var tentativi = (Array.isArray(j.tentativi) ? j.tentativi : []).filter(function(t){ return pins[t.pin]; });
-
-    try{ SB.from('fatt_studenti').upsert(studenti, {onConflict:'pin'}).then(function(){}, function(){}); }catch(e){}
-    if(tentativi.length){ try{ SB.from('fatt_tentativi').upsert(tentativi, {onConflict:'id'}).then(function(){}, function(){}); }catch(e){} }
-
-    var archivio = v2 ? j.archivio : (j.config ? j.config.archivio : null);
-    if(archivio){ try{ SB.from('fatt_config').update({ archivio:archivio }).eq('id', 1).then(function(){}, function(){}); }catch(e){} }
-
-    // "compiti a casa": aggiorno SOLO questa classe dentro la lista, senza riscrivere quella delle altre.
+    var pinsMap = {}; studenti.forEach(function(s){ pinsMap[s.pin] = true; });
+    var pinsArr = studenti.map(function(s){ return s.pin; });
+    var tentativi = (Array.isArray(j.tentativi) ? j.tentativi : []).filter(function(t){ return pinsMap[t.pin]; });
     var vuoleCompiti = v2 ? !!j.compitiClasse
       : !!(j.config && Array.isArray(j.config.compiti_classi) && j.config.compiti_classi.indexOf(classe) !== -1);
-    try{
-      SB.from('fatt_config').select('compiti_classi').eq('id', 1).maybeSingle().then(function(res){
-        var arr = (res && res.data && Array.isArray(res.data.compiti_classi)) ? res.data.compiti_classi.slice() : [];
-        var i = arr.indexOf(classe);
-        if(vuoleCompiti && i === -1) arr.push(classe);
-        if(!vuoleCompiti && i !== -1) arr.splice(i, 1);
-        STATE.compitiClassi = arr;
-        try{ SB.from('fatt_config').update({ compiti_classi:arr }).eq('id', 1).then(function(){}, function(){}); }catch(e){}
-        refreshCloudStud(function(){ refreshConsegne(function(){ if(typeof renderDocente === 'function') renderDocente(); }); });
-      }, function(){});
-    }catch(e){}
+    // L'ARCHIVIO FATTURE È UNICO PER TUTTE LE CLASSI: il ripristino di una classe NON deve riscriverlo,
+    // altrimenti riporta indietro le fatture anche alle altre classi (che magari stanno facendo i compiti).
+    // Del backup lo uso solo in locale, e solo se qui non ne ho già uno.
+    var archivioDalBackup = v2 ? j.archivio : (j.config ? j.config.archivio : null);
 
-    // in LOCALE: rendo attiva la classe ripristinata, con il suo archivio e la sua assegnazione
-    try{
-      CLASSE = { classe:classe, alunni:studenti.map(function(s){ return { pin:s.pin, nome:s.nome, cognome:s.cognome }; }) };
-      localStorage.setItem('ff_classe', JSON.stringify(CLASSE));
-      STATE.classeAttiva = classe;
-      if(archivio){ FATTURE = adattaArchivio(archivio); localStorage.setItem('ff_archivio', JSON.stringify(FATTURE)); }
-      // L'assegnazione è per-alunno: la ripesco da un alunno che ce l'ha, così il pannello "Assegna" la mostra.
-      var conAss = studenti.find(function(s){ return s.fattura_assegnata; });
-      if(conAss){
-        STATE.assegnate = parseAssegnazione(conAss.fattura_assegnata);
-        STATE.assegnataId = assegnPrimoId(conAss.fattura_assegnata);
-        localStorage.setItem('ff_assegnata', conAss.fattura_assegnata);
-        if(conAss.livello_assegnato) localStorage.setItem('ff_livello', String(conAss.livello_assegnato));
-      } else {
-        STATE.assegnate = []; STATE.assegnataId = null; try{ localStorage.removeItem('ff_assegnata'); }catch(e){}
-      }
-      buildRubrica();
-    }catch(e){}
+    // Un ripristino NON deve MAI cancellare in silenzio un voto messo DOPO il backup: prima leggo i voti
+    // attuali, e dove il backup non ne ha uno tengo quello che c'è già.
+    SB.from('fatt_studenti').select('pin,valutazione,valutazione_snapshot').in('pin', pinsArr).then(function(resVoti){
+      var attuali = {}; ((resVoti && resVoti.data) || []).forEach(function(s){ attuali[s.pin] = s; });
+      var votiSalvati = 0;
+      var righe = studenti.map(function(s){
+        var r = {}; for(var k in s) r[k] = s[k];
+        var ora = attuali[s.pin];
+        if(!r.valutazione && ora && ora.valutazione){
+          r.valutazione = ora.valutazione;
+          r.valutazione_snapshot = ora.valutazione_snapshot;
+          votiSalvati++;
+        }
+        // CONGELAMENTO DEL TEMPO: il ripristino NON deve "congelare" anche il lucchetto della presenza.
+        // Al momento del backup l'alunno risultava collegato (stato in_corso, ultimo_accesso recente): se lo
+        // rimettessi così, al rientro col PIN il sistema penserebbe "eri già dentro ieri → possibile secondo
+        // dispositivo → BLOCCATO". Invece: spengo la presenza (nessuno è collegato ORA) e do il VIA LIBERA
+        // (riammesso=true, come un "Riammetti" di classe): ognuno rientra col PIN, uno alla volta (il claim su
+        // riammesso è atomico), e riprende ESATTAMENTE da dov'era (la sua bozza_corrente è nel backup). Chi
+        // aveva già consegnato resta consegnato: al rientro rivede "Verifica consegnata".
+        r.ultimo_accesso = null;
+        r.fattura_corrente = null;
+        r.livello_corrente = null;
+        r.riammesso = true;
+        return r;
+      });
 
-    showAlert('Classe ' + (classe || '—') + ' ripristinata: ' + studenti.length + ' alunni e ' + tentativi.length
-      + (tentativi.length === 1 ? ' consegna rimessi com\'erano.' : ' consegne rimessi com\'erano.')
-      + (vuoleCompiti ? ' La classe torna in COMPITI A CASA.' : ' La classe torna in dashboard.')
-      + ' Le altre classi non sono state toccate.');
-    setTimeout(function(){ refreshCloudStud(function(){ refreshConsegne(function(){ if(typeof renderDocente==='function') renderDocente(); }); }); }, 600);
+      SB.from('fatt_studenti').upsert(righe, { onConflict:'pin' }).then(function(r1){
+        if(r1 && r1.error){ showAlert('RIPRISTINO FALLITO (alunni): ' + r1.error.message + '. Non è stato ripristinato nulla: riprova.'); return; }
+        var poi = function(){
+          // compiti a casa: tocco SOLO questa classe dentro la lista, senza riscrivere quella delle altre
+          SB.from('fatt_config').select('compiti_classi').eq('id', 1).maybeSingle().then(function(res){
+            var arr = (res && res.data && Array.isArray(res.data.compiti_classi)) ? res.data.compiti_classi.slice() : [];
+            var i = arr.indexOf(classe);
+            if(vuoleCompiti && i === -1) arr.push(classe);
+            if(!vuoleCompiti && i !== -1) arr.splice(i, 1);
+            STATE.compitiClassi = arr;
+            SB.from('fatt_config').update({ compiti_classi:arr }).eq('id', 1).then(function(){}, function(){});
+
+            // in LOCALE: rendo attiva la classe ripristinata
+            try{
+              CLASSE = { classe:classe, alunni:studenti.map(function(s){ return { pin:s.pin, nome:s.nome, cognome:s.cognome }; }) };
+              localStorage.setItem('ff_classe', JSON.stringify(CLASSE));
+              STATE.classeAttiva = classe;
+              if(archivioDalBackup && (typeof FATTURE === 'undefined' || !FATTURE || !FATTURE.length)){
+                FATTURE = adattaArchivio(archivioDalBackup);           // solo se qui non ho già le fatture
+                localStorage.setItem('ff_archivio', JSON.stringify(FATTURE));
+              }
+              var conAss = studenti.find(function(s){ return s.fattura_assegnata; });
+              if(conAss){
+                STATE.assegnate = parseAssegnazione(conAss.fattura_assegnata);
+                STATE.assegnataId = assegnPrimoId(conAss.fattura_assegnata);
+                localStorage.setItem('ff_assegnata', conAss.fattura_assegnata);
+                if(conAss.livello_assegnato) localStorage.setItem('ff_livello', String(conAss.livello_assegnato));
+              } else {
+                STATE.assegnate = []; STATE.assegnataId = null; try{ localStorage.removeItem('ff_assegnata'); }catch(e){}
+              }
+              buildRubrica();
+            }catch(e){}
+
+            showAlert('Classe ' + (classe || '—') + ' ripristinata: ' + studenti.length + ' alunni e ' + tentativi.length
+              + (tentativi.length === 1 ? ' consegna rimessi com\'erano.' : ' consegne rimessi com\'erano.')
+              + (votiSalvati ? (' ' + votiSalvati + (votiSalvati === 1 ? ' voto messo dopo il backup è stato CONSERVATO.' : ' voti messi dopo il backup sono stati CONSERVATI.')) : '')
+              + (vuoleCompiti ? ' La classe torna in COMPITI A CASA.' : ' La classe torna in dashboard.')
+              + ' Le altre classi e l\'archivio fatture non sono stati toccati.');
+            refreshCloudStud(function(){ refreshConsegne(function(){ if(typeof renderDocente === 'function') renderDocente(); }); });
+          }, function(){ showAlert('Ripristino a metà: gli alunni sono tornati, ma non ho potuto aggiornare la modalità della classe.'); });
+        };
+
+        if(!tentativi.length){ poi(); return; }
+        SB.from('fatt_tentativi').upsert(tentativi, { onConflict:'id' }).then(function(r2){
+          if(r2 && r2.error){ showAlert('RIPRISTINO A METÀ: gli alunni sono tornati, ma le ' + tentativi.length + ' consegne NON sono state ripristinate (' + r2.error.message + '). NON cancellare il file di backup: riprova.'); return; }
+          poi();
+        }, function(){ showAlert('RIPRISTINO A METÀ: le consegne non sono state ripristinate. NON cancellare il file di backup: riprova.'); });
+      }, function(){ showAlert('RIPRISTINO FALLITO: il cloud non ha risposto. Non è stato ripristinato nulla: riprova.'); });
+    }, function(){ showAlert('Ripristino non avviato: non riesco a leggere i voti attuali. Riprova.'); });
   }
-  try{ window.addEventListener('pagehide', function(){ if(STATE.studente) cloudClearPresenza(STATE.studente.pin); }); }catch(e){}
+  // Chiusura della pagina: cancello la presenza SOLO se ero io il proprietario della sessione.
+  // (Prima anche il dispositivo respinto lo faceva, e cancellava la presenza di chi stava lavorando.)
+  try{ window.addEventListener('pagehide', function(){ if(STATE.studente) cloudClearPresenzaSeMia(STATE.studente.pin); }); }catch(e){}
   function cloudCollegati(cb){
     if(!SB){ cb && cb([]); return; }
     try{
@@ -2819,7 +2922,11 @@
     window.scrollTo(0, 0);
   }
   function goGate(){
-    stopAttesaWatcher(); stopPresenza(); stopCollegatiTimer(); stopBloccoWatcher(); stopConsegnaWatcher(); stopAssegnazioneWatcher(); stopSessioneWatcher(); STATE.riammesso = false; STATE.modalitaCompiti = false; STATE.solExitFn = null; if(STATE.studente){ cloudClearPresenza(STATE.studente.pin); STATE.studente = null; }
+    stopAttesaWatcher(); stopPresenza(); stopCollegatiTimer(); stopBloccoWatcher(); stopConsegnaWatcher(); stopAssegnazioneWatcher(); stopSessioneWatcher(); STATE.riammesso = false; STATE.modalitaCompiti = false; STATE.solExitFn = null;
+    // «Esci»: cancello la presenza SOLO se ero il proprietario. Un dispositivo respinto che preme «Esci»
+    // non deve far sparire dalla dashboard l'alunno vero, che sta lavorando.
+    if(STATE.studente){ cloudClearPresenzaSeMia(STATE.studente.pin); STATE.studente = null; }
+    STATE.proprietario = false;
     try{ sessionStorage.removeItem('ff_studente_attivo'); sessionStorage.removeItem('ff_docente_attivo'); }catch(e){}
     byId('gate-doc').style.display = 'none'; byId('gate-pin').style.display = '';
     byId('in-pin').value = ''; byId('in-pass').value = '';
@@ -3082,6 +3189,19 @@
       return;
     }
     var pin = STATE.studente ? STATE.studente.pin : null;
+    // QUI arriva SOLO chi è stato davvero ammesso a lavorare (chi viene respinto si ferma prima, sulla
+    // schermata di blocco). Da questo momento questo dispositivo è il PROPRIETARIO della sessione: è l'unico
+    // autorizzato a scrivere e cancellare la presenza di questo PIN.
+    STATE.proprietario = true;
+    // Carico la bozza in corso già nel cloud PRIMA che l'alunno ricominci a scrivere: così, se ha più fatture
+    // abbozzate, salvandone una non cancella le altre (la mappa parte piena, non da zero).
+    STATE.bozzaMappa = {};
+    try{
+      if(pin) SB.from('fatt_studenti').select('bozza_corrente').eq('pin', pin).maybeSingle().then(function(rb){
+        var b = (rb && rb.data) ? rb.data.bozza_corrente : null;
+        if(b && typeof b === 'object') STATE.bozzaMappa = b;
+      }, function(){});
+    }catch(e){}
     // Allinea le consegne LOCALI a quelle VERE del cloud, così il menù non mostra "consegnata" fantasma
     // rimaste da prove/verifiche precedenti (la verità è il cloud).
     rebuildConsegnateLocali(pin, function(){
@@ -3365,6 +3485,17 @@
   // Salvataggio automatico LOCALE della compilazione dell'alunno (solo localStorage).
   // Procede solo se l'alunno sta effettivamente compilando: studente presente,
   // esercitazione non ancora consegnata ed editor non in modalità soluzione.
+  // Spinge la bozza in corso (mappa { fatturaId: html }) nel cloud, sulla riga dell'alunno. Solo il
+  // PROPRIETARIO della sessione scrive, e solo per le VERIFICHE (i compiti a casa sono un'altra cosa e non
+  // devono finire qui, altrimenti precompilerebbero la verifica). È questo che rende il backup un backup VERO:
+  // il lavoro non consegnato smette di vivere solo nel dispositivo dell'alunno e diventa recuperabile.
+  function pushBozzaCloud(){
+    if(!SB || !STATE.studente || !STATE.proprietario || STATE.modalitaCompiti) return;
+    try{
+      SB.from('fatt_studenti').update({ bozza_corrente: (STATE.bozzaMappa || {}) })
+        .eq('pin', STATE.studente.pin).then(function(){}, function(){});
+    }catch(e){}
+  }
   function salvaLavoro(){
     try{
       if(!STATE.studente || STATE.consegnata) return;
@@ -3372,6 +3503,14 @@
       if(!ed || ed.classList.contains('sol-mode')) return;
       commitValues(ed);
       localStorage.setItem('ff_lavoro_' + STATE.studente.pin + '_' + STATE.assegnataId, JSON.stringify({ esercizioId: STATE.assegnataId, html: ed.innerHTML }));
+      // Congelamento del tempo: il lavoro in corso di VERIFICA va anche nel cloud, con un piccolo ritardo
+      // (accorpa le raffiche di battitura, niente tempesta di scritture). Backup/ripristino se lo portano dietro.
+      if(!STATE.modalitaCompiti && STATE.proprietario && STATE.assegnataId){
+        STATE.bozzaMappa = STATE.bozzaMappa || {};
+        STATE.bozzaMappa[STATE.assegnataId] = ed.innerHTML;
+        if(STATE.bozzaCloudTimer) clearTimeout(STATE.bozzaCloudTimer);
+        STATE.bozzaCloudTimer = setTimeout(pushBozzaCloud, 4000);
+      }
     }catch(e){}
   }
 
@@ -3663,14 +3802,22 @@
     if(!SB){ showAlert('Cloud non disponibile.'); return; }
     var assigned = effectiveAssignedList(a.pin);
     if(!assigned.length){ showAlert('Nessuna fattura assegnata a ' + a.cognome + ' ' + a.nome + ': non c\'è nulla da valutare.'); return; }
-    SB.from('fatt_tentativi').select('fattura_id,risposte,created_at').eq('pin', a.pin).eq('completato', true).neq('modalita', 'compiti').order('created_at', {ascending:true}).then(function(res){
+    // NIENTE filtro su completato=true. Il «Riammetti» RIAPRE le consegne (completato=false) senza cancellarle:
+    // con quel filtro la scheda Valutazione non vedeva più il lavoro di un alunno riammesso, mostrava tutto
+    // «non svolta», e quindi NON salvava la fotografia (valutazione_snapshot). Poi il Reset cancellava le righe
+    // e il lavoro spariva PER SEMPRE. Era la catena che portava alla perdita definitiva.
+    SB.from('fatt_tentativi').select('fattura_id,risposte,completato,created_at').eq('pin', a.pin).neq('modalita', 'compiti').order('created_at', {ascending:true}).then(function(res){
       var rows = (res && res.data) || []; var byF = {};
       rows.forEach(function(r){ if(!r.fattura_id) return; var rr=r.risposte||{}; var cur=byF[r.fattura_id];
-        if(cur && !cur.nonSvolta && rr.nonSvolta) return; // anti-race: il lavoro vero non è coperto da una «non svolta»
+        if(cur && !cur.nonSvolta && rr.nonSvolta) return; // il lavoro vero non viene coperto da una «non svolta»
         byF[r.fattura_id] = rr; });
       var fatture = assigned.slice().sort(function(x, y){ return (parseInt(numeroFattura(x.id), 10) || 0) - (parseInt(numeroFattura(y.id), 10) || 0); }).map(function(x){
         var rr = byF[x.id] || null;
-        return { id:x.id, num:numeroFattura(x.id), nonSvolta:!rr,
+        // «non svolta» = non c'è nessuna riga, OPPURE c'è il segnaposto lasciato dalla consegna forzata.
+        // Prima era solo `!rr`: i segnaposto passavano per consegne vuote e tu non distinguevi
+        // «non l'ha mai fatta» da «l'ha consegnata in bianco».
+        var mai = !rr || !!rr.nonSvolta;
+        return { id:x.id, num:numeroFattura(x.id), nonSvolta:mai,
           cortesiaAlunno: rr ? (rr.cortesiaAlunno || '') : '', cortesiaCorretta: rr ? (rr.cortesiaCorretta || '') : '',
           dashboardAlunno: rr ? (rr.dashboardAlunno || '') : '', dashboardCorretta: rr ? (rr.dashboardCorretta || '') : '' };
       });
@@ -3718,8 +3865,14 @@
   byId('in-pass').addEventListener('keydown', function(e){ if(e.key==='Enter') byId('btn-entra-docente').click(); });
   function entraStudente(al){
     byId('err-alunno').textContent = '';
-    if(!CLASSE) CLASSE = { classe:(al.classe||''), alunni:[al] };
     STATE.studente = al;
+    // Questo dispositivo può avere in memoria la classe di un ALTRO gruppo (il PC del prof, un PC di laboratorio,
+    // il portatile passato di mano). La classe che conta è quella DELL'ALUNNO, presa dal cloud: riallineo.
+    // Senza questo, la sua consegna veniva timbrata con la classe sbagliata e spariva dai conti della sua.
+    var suaClasse = al.classe || '';
+    if(!CLASSE || (suaClasse && CLASSE.classe !== suaClasse)){
+      CLASSE = { classe:suaClasse || ((CLASSE && CLASSE.classe) || ''), alunni:[al] };
+    }
     // Smistamento: se non c'è assegnazione e il docente non è presente → COMPITI A CASA (nessun blocco PIN).
     // Altrimenti flusso normale (verifica/esercitazione in classe, con anti-doppio-accesso).
     cloudModalitaAlunno(al.pin, function(mode){
@@ -4016,14 +4169,26 @@
     var esci = byId('btn-esci-menu'); if(esci) esci.textContent = 'Esci';
     show('docente'); renderDocente();
   }
+  // ATTENZIONE — questa funzione CANCELLA DEFINITIVAMENTE. Prima, dentro la cartella «Senza classe»,
+  // il filtro diventava `created_at >= 2000` e quindi cancellava i compiti di TUTTE LE CLASSI, con un
+  // messaggio di conferma che non nominava nessuna classe. Era il bug più distruttivo dell'app.
+  // Ora ogni cartella cancella SOLO il proprio contenuto, e la conferma dice esattamente cosa sparisce.
   function svuotaArchivioCompiti(classe){
     if(!SB) return;
-    var scope = (classe && classe !== '—') ? (' della classe ' + classe) : '';
-    showConfirm('Vuoi svuotare l\'archivio dei compiti a casa' + scope + '? I compiti consegnati verranno cancellati definitivamente. (Non tocca le verifiche.)', function(){
+    var senzaClasse = (!classe || classe === '—');
+    var scope = senzaClasse ? ' della cartella «Senza classe»' : (' della classe ' + classe);
+    showConfirm('Vuoi svuotare l\'archivio dei compiti a casa' + scope + '? I compiti consegnati verranno cancellati DEFINITIVAMENTE. Le altre classi NON vengono toccate. (Non tocca le verifiche.)', function(){
+      var fatto = function(){ showAlert('Archivio compiti svuotato' + scope + '.'); apriArchivioCompiti(); };
+      var errore = function(){ showAlert('Errore durante lo svuotamento: non è stato cancellato nulla.'); };
       try{
-        var q = SB.from('fatt_tentativi').delete().eq('modalita', 'compiti');
-        if(classe && classe !== '—') q = q.eq('classe', classe); else q = q.gte('created_at', '2000-01-01');
-        q.then(function(){ showAlert('Archivio compiti svuotato' + scope + '.'); apriArchivioCompiti(); }, function(){ showAlert('Errore durante lo svuotamento.'); });
+        if(!senzaClasse){
+          SB.from('fatt_tentativi').delete().eq('modalita', 'compiti').eq('classe', classe).then(fatto, errore);
+        } else {
+          // «Senza classe» = le righe con classe vuota o mancante. SOLO quelle.
+          SB.from('fatt_tentativi').delete().eq('modalita', 'compiti').is('classe', null).then(function(){
+            SB.from('fatt_tentativi').delete().eq('modalita', 'compiti').eq('classe', '').then(fatto, errore);
+          }, errore);
+        }
       }catch(e){ showAlert('Errore: ' + e.message); }
     });
   }
@@ -4090,7 +4255,7 @@
   byId('btn-reset').addEventListener('click', function(){
     var cl = (CLASSE && CLASSE.classe) || STATE.classeAttiva || '';
     if(!cl){ showAlert('Nessuna classe selezionata da azzerare. Carica o scegli una classe.'); return; }
-    showConfirm('Resettare la classe ' + cl + '? Uscirà dalla dashboard e passerà ai COMPITI A CASA (i suoi alunni, col PIN, faranno i compiti). Vengono azzerate assegnazione e verifiche consegnate della classe; i compiti già consegnati restano. Le altre classi non si toccano. Per rifarci una verifica la ricarichi con «Carica classe».', function(){
+    showConfirm('Resettare la classe ' + cl + '? Passerà ai COMPITI A CASA (i suoi alunni, col PIN, faranno i compiti) e uscirà dalla dashboard.\n\n⚠ ATTENZIONE: le verifiche già consegnate vengono CANCELLATE DEFINITIVAMENTE. Se non le hai ancora valutate, quel lavoro non sarà più recuperabile: fai prima «Backup» (o valutale).\n\nI voti restano (gli alunni li vedono nei compiti). I compiti a casa restano. Le altre classi non si toccano.', function(){
       cloudResetClasse(cl);
       cloudSetModalitaCompiti(cl, true); // dopo il Reset la classe passa in modalità compiti a casa
       STATE.assegnate = []; STATE.assegnataId = null;
