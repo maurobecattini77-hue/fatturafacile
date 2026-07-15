@@ -2593,7 +2593,7 @@
     h += '<div class="cx-totbar"><span class="lbl">Totale fattura</span><span class="val">' + moneyOr(r.totFatt) + '</span></div></div></div>';
     var pay = []; if(t.p_metodo) pay.push(esc(t.p_metodo)); if(t.p_termini) pay.push(esc(t.p_termini));
     if(pay.length) h += '<div class="cx-pay"><b>Pagamento:</b> ' + pay.join(' · ') + '</div>';
-    if(t.p_iban && /bonifico/i.test(t.p_metodo)) h += '<div class="cx-pay" style="margin-top:2px;"><b>IBAN:</b> ' + esc(t.p_iban) + '</div>';
+    if(t.p_iban && /bonifico|riba/i.test(t.p_metodo)) h += '<div class="cx-pay" style="margin-top:2px;"><b>IBAN:</b> ' + esc(t.p_iban) + '</div>'; // IBAN anche con RiBa (non solo Bonifico), come in aggiornaIban
     h += '<div class="cx-note">Documento privo di valenza fiscale ai sensi dell\'art. 21 DPR 633/72.</div><div class="cx-foot">Copia di cortesia · generata con Fattura Facile</div>';
     return h;
   }
@@ -2670,7 +2670,7 @@
     if(resetAnag !== false){ anaUnlock('v'); anaUnlock('c'); }
     // calcoli: automatici solo in Automatica; negli altri livelli i campi calcolati tornano editabili
     if(n === 3){ autocalc(); }
-    else { setComputedReadonly(false); }
+    else { setComputedReadonly(false); sbloccaBolloAuto(); }
   }
 
   /* ---------- MATTONE 2 · Ricerca prodotti dal listino (livelli Guidata/Automatica) ---------- */
@@ -2762,8 +2762,23 @@
         var imp = row.querySelector('.sp-imp'); imp.value = eur(BOLLO_IMPORTO); imp.readOnly = true;
         var del = row.querySelector('.sp-del'); if(del) del.style.display = 'none';
         byId('spese-art15').appendChild(row);
+      } else if(ex.getAttribute('data-auto-bollo') === '1'){
+        // In Automatica la riga bollo è sempre bloccata: la ri-affermo (potrebbe essere stata sbloccata passando a un livello manuale).
+        var d2 = ex.querySelector('.sp-desc'); if(d2){ d2.value = 'Bollo'; d2.readOnly = true; }
+        var imp2 = ex.querySelector('.sp-imp'); if(imp2){ imp2.value = eur(BOLLO_IMPORTO); imp2.readOnly = true; }
+        var del2 = ex.querySelector('.sp-del'); if(del2) del2.style.display = 'none';
       }
     } else if(ex && ex.getAttribute('data-auto-bollo') === '1'){ ex.remove(); }
+  }
+  // Cambiando a un livello MANUALE (non Automatica) la riga bollo aggiunta in automatico va sbloccata: l'alunno
+  // deve poterla correggere o cancellare (prima restava readOnly e senza cestino → fattura sbagliata di 2€).
+  function sbloccaBolloAuto(){
+    var ex = findBolloRow();
+    if(ex && ex.getAttribute('data-auto-bollo') === '1'){
+      var d = ex.querySelector('.sp-desc'); if(d) d.readOnly = false;
+      var imp = ex.querySelector('.sp-imp'); if(imp) imp.readOnly = false;
+      var del = ex.querySelector('.sp-del'); if(del) del.style.display = '';
+    }
   }
   function readDomSol(){
     var arts = [];
@@ -3449,7 +3464,7 @@
     var dEl = document.querySelector('#editor [data-k="d_data"]'); if(dEl) dEl.value = dataIso(t.d_data);
     var vs = document.querySelector('.ana-search[data-scope="v"]'); if(vs) vs.value = t.v_nome || '';
     var cs = document.querySelector('.ana-search[data-scope="c"]'); if(cs) cs.value = t.c_nome || '';
-    byId('pag-iban-wrap').style.display = /bonifico/i.test(t.p_metodo || '') ? '' : 'none';
+    byId('pag-iban-wrap').style.display = /bonifico|riba/i.test(t.p_metodo || '') ? '' : 'none'; // IBAN visibile anche con RiBa
     // Articoli
     (sol.articoli || []).forEach(function(a, i){
       var boxes = document.querySelectorAll('#editor .artbox'), box;
