@@ -2947,6 +2947,9 @@
     window.scrollTo(0, 0);
   }
   function goGate(){
+    // «Esci» mette al sicuro l'ULTIMO tasto prima di chiudere la sessione: senza questo, l'ultima modifica
+    // ancora nel debounce andava persa (le altre uscite — «Torna ai compiti», «Le mie fatture» — già salvavano).
+    try{ if(byId('editor') && byId('editor').style.display !== 'none') salvaLavoro(); }catch(e){}
     stopAttesaWatcher(); stopPresenza(); stopCollegatiTimer(); stopBloccoWatcher(); stopConsegnaWatcher(); stopAssegnazioneWatcher(); stopSessioneWatcher(); STATE.riammesso = false; STATE.modalitaCompiti = false; STATE.esercitazione = false; STATE.solExitFn = null;
     // «Esci»: cancello la presenza SOLO se ero il proprietario. Un dispositivo respinto che preme «Esci»
     // non deve far sparire dalla dashboard l'alunno vero, che sta lavorando.
