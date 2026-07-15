@@ -1814,29 +1814,38 @@
   // BACKUP DELLA SOLA CLASSE ATTIVA (versione 2). Nel file finiscono SOLO i suoi alunni e le SUE consegne,
   // più l'archivio fatture e il fatto che la classe fosse o no in "compiti a casa". Le altre classi NON
   // vengono toccate, né salvate: così il ripristino non può disturbarle.
-  function backupClasse(){
-    if(!SB){ showAlert('Cloud non disponibile.'); return; }
+  // cb: chiamata con true se il backup è stato scaricato, false se è fallito. silenzioso: niente showAlert propri
+  // (usato dal backup AUTOMATICO prima del Reset, dove i messaggi li gestisce il chiamante).
+  function backupClasse(cb, silenzioso){
+    var fallito = function(msg){ if(silenzioso){ if(cb) cb(false); } else { showAlert(msg); } };
+    if(!SB){ fallito('Cloud non disponibile.'); return; }
     var cl = (CLASSE && CLASSE.classe) || STATE.classeAttiva || '';
-    if(!cl){ showAlert('Nessuna classe selezionata: scegli prima la classe da salvare.'); return; }
+    if(!cl){ fallito('Nessuna classe selezionata: scegli prima la classe da salvare.'); return; }
     SB.from('fatt_studenti').select('*').eq('classe', cl).then(function(r1){
+      if(r1 && r1.error){ fallito('Errore backup (alunni).'); return; }
       var studenti = (r1 && r1.data) ? r1.data : [];
-      if(!studenti.length){ showAlert('Nessun alunno nella classe ' + cl + ': niente da salvare.'); return; }
+      if(!studenti.length){ if(silenzioso){ if(cb) cb(true); } else { showAlert('Nessun alunno nella classe ' + cl + ': niente da salvare.'); } return; }
       var pins = studenti.map(function(s){ return s.pin; });
       SB.from('fatt_config').select('archivio,compiti_classi').eq('id', 1).maybeSingle().then(function(r2){
+        if(r2 && r2.error){ fallito('Errore backup (archivio).'); return; }
         var cfg = (r2 && r2.data) ? r2.data : null;
         var inCompiti = !!(cfg && Array.isArray(cfg.compiti_classi) && cfg.compiti_classi.indexOf(cl) !== -1);
         // le consegne le prendo per PIN (più sicuro del campo classe, che su righe vecchie può mancare)
         SB.from('fatt_tentativi').select('*').in('pin', pins).then(function(r3){
+          if(r3 && r3.error){ fallito('Errore backup (consegne).'); return; }
           var tentativi = (r3 && r3.data) ? r3.data : [];
           var snap = { app:'fattura-facile', versione:2, classe:cl, data:new Date().toISOString(),
                        studenti:studenti, tentativi:tentativi,
                        archivio:(cfg ? cfg.archivio : null), compitiClasse:inCompiti };
           ff_download('backup_' + cl + '_' + ff_dateStamp() + '.json', JSON.stringify(snap, null, 2), 'application/json');
-          showAlert('Backup della classe ' + cl + ' salvato: ' + studenti.length + ' alunni e ' + tentativi.length
-            + (tentativi.length === 1 ? ' consegna.' : ' consegne.') + ' Nel file c\'è SOLO questa classe.');
-        }, function(){ showAlert('Errore backup (consegne).'); });
-      }, function(){ showAlert('Errore backup (archivio).'); });
-    }, function(){ showAlert('Errore backup (alunni).'); });
+          if(!silenzioso){
+            showAlert('Backup della classe ' + cl + ' salvato: ' + studenti.length + ' alunni e ' + tentativi.length
+              + (tentativi.length === 1 ? ' consegna.' : ' consegne.') + ' Nel file c\'è SOLO questa classe.');
+          }
+          if(cb) cb(true);
+        }, function(){ fallito('Errore backup (consegne).'); });
+      }, function(){ fallito('Errore backup (archivio).'); });
+    }, function(){ fallito('Errore backup (alunni).'); });
   }
   // RIPRISTINO DELLA SOLA CLASSE del file. Rimette alunni + consegne di QUELLA classe e la riporta com'era
   // (dashboard o compiti a casa). NON sovrascrive la configurazione globale: dell'archivio aggiorna solo le
@@ -4435,20 +4444,27 @@
   byId('btn-reset').addEventListener('click', function(){
     var cl = (CLASSE && CLASSE.classe) || STATE.classeAttiva || '';
     if(!cl){ showAlert('Nessuna classe selezionata da azzerare. Carica o scegli una classe.'); return; }
-    showConfirm('Resettare la classe ' + cl + '? Passerà ai COMPITI A CASA (i suoi alunni, col PIN, faranno i compiti) e uscirà dalla dashboard.\n\n⚠ ATTENZIONE: le verifiche già consegnate vengono CANCELLATE DEFINITIVAMENTE. Se non le hai ancora valutate, quel lavoro non sarà più recuperabile: fai prima «Backup» (o valutale).\n\nI voti restano (gli alunni li vedono nei compiti). I compiti a casa restano. Le altre classi non si toccano.', function(){
-      cloudResetClasse(cl);
-      cloudSetModalitaCompiti(cl, true); // dopo il Reset la classe passa in modalità compiti a casa
-      STATE.assegnate = []; STATE.assegnataId = null;
-      try{
-        localStorage.removeItem('ff_assegnata'); localStorage.removeItem('ff_livello'); sessionStorage.removeItem('ff_studente_attivo');
-        (CLASSE && CLASSE.alunni ? CLASSE.alunni : []).forEach(function(a){
-          localStorage.removeItem('ff_consegnate_' + a.pin); localStorage.removeItem('ff_iniziate_' + a.pin);
-          var rm = []; for(var i = 0; i < localStorage.length; i++){ var k = localStorage.key(i); if(k && k.indexOf('ff_lavoro_' + a.pin + '_') === 0) rm.push(k); }
-          rm.forEach(function(k){ localStorage.removeItem(k); });
-        });
-      }catch(e){}
-      renderDocente();
-      showAlert('Classe ' + cl + ' resettata: è uscita dalla dashboard e passa ai COMPITI A CASA (i suoi alunni, entrando col PIN, fanno i compiti). Per rifarci una verifica, ricaricala con «Carica classe».');
+    showConfirm('Resettare la classe ' + cl + '? Passerà ai COMPITI A CASA (i suoi alunni, col PIN, faranno i compiti) e uscirà dalla dashboard.\n\n🛟 Prima di azzerare, l\'app SCARICA DA SOLA un backup di sicurezza di questa classe (con le verifiche consegnate). Così, anche se dimentichi di valutarle, non le perdi.\n\n⚠ Le verifiche consegnate vengono poi CANCELLATE dal cloud (restano solo nel file di backup appena scaricato). I voti già messi restano (gli alunni li vedono nei compiti). I compiti a casa e le altre classi non si toccano.', function(){
+      // BACKUP AUTOMATICO DI SICUREZZA prima di cancellare le consegne. Se fallisce, NON resetto (niente perdita di dati).
+      backupClasse(function(ok){
+        if(!ok){
+          showAlert('Backup automatico NON riuscito: il Reset è stato ANNULLATO per non rischiare di perdere le verifiche. Controlla la connessione e riprova.');
+          return;
+        }
+        cloudResetClasse(cl);
+        cloudSetModalitaCompiti(cl, true); // dopo il Reset la classe passa in modalità compiti a casa
+        STATE.assegnate = []; STATE.assegnataId = null;
+        try{
+          localStorage.removeItem('ff_assegnata'); localStorage.removeItem('ff_livello'); sessionStorage.removeItem('ff_studente_attivo');
+          (CLASSE && CLASSE.alunni ? CLASSE.alunni : []).forEach(function(a){
+            localStorage.removeItem('ff_consegnate_' + a.pin); localStorage.removeItem('ff_iniziate_' + a.pin);
+            var rm = []; for(var i = 0; i < localStorage.length; i++){ var k = localStorage.key(i); if(k && k.indexOf('ff_lavoro_' + a.pin + '_') === 0) rm.push(k); }
+            rm.forEach(function(k){ localStorage.removeItem(k); });
+          });
+        }catch(e){}
+        renderDocente();
+        showAlert('Classe ' + cl + ' resettata. 🛟 Backup di sicurezza scaricato (cerca «backup_' + cl + '_...json» nella cartella Download). La classe è passata ai COMPITI A CASA. Per rifarci una verifica, ricaricala con «Carica classe».');
+      }, true); // true = silenzioso: i messaggi li do io qui
     });
   });
   byId('btn-carica-classe').addEventListener('click', function(){ byId('file-classe').click(); });
@@ -4467,7 +4483,7 @@
       showAlert('Riammessi ' + targets.length + (targets.length===1?' alunno.':' alunni.'));
     });
   });
-  byId('btn-backup').addEventListener('click', backupClasse);
+  byId('btn-backup').addEventListener('click', function(){ backupClasse(); });
   byId('btn-ripristina').addEventListener('click', function(){ byId('file-ripristina').click(); });
   byId('file-ripristina').addEventListener('change', function(){ leggiFile(this, function(j){ ripristinaClasse(j); }); });
   byId('file-classe').addEventListener('change', function(){ leggiFile(this, function(j){
