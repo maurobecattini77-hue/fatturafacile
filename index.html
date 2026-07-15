@@ -1202,7 +1202,7 @@
       }).eq('pin', STATE.studente.pin).then(function(){}, function(){});
     }catch(e){}
   }
-  function startPresenza(){ stopPresenza(); cloudPresenza(); STATE.presenzaTimer = setInterval(cloudPresenza, 30000); }
+  function startPresenza(){ stopPresenza(); cloudPresenza(); STATE.presenzaTimer = setInterval(cloudPresenza, 10000); } // battito ogni 10s: la dashboard reagisce in fretta
   function stopPresenza(){ if(STATE.presenzaTimer){ clearInterval(STATE.presenzaTimer); STATE.presenzaTimer = null; } }
   // Cancella la presenza SOLO se questo dispositivo possiede davvero la sessione. Chi è stato respinto
   // non deve poter toccare la presenza di nessuno.
@@ -2979,7 +2979,7 @@
     if(allDone && stato === 'bloccato') return { cls:'st-done', txt:'Consegnato', done:true, on:false, corso:false, block:true };
     if(allDone) return { cls:'st-done', txt:'Consegnato', done:true, on:false, corso:false, block:false };
     if(stato === 'bloccato') return { cls:'st-block', txt:'Bloccato', done:false, on:false, corso:false, block:true };
-    var recent = s.ultimo_accesso && (Date.now() - new Date(s.ultimo_accesso).getTime() < 120000);
+    var recent = s.ultimo_accesso && (Date.now() - new Date(s.ultimo_accesso).getTime() < 30000); // "Non collegato" dopo ~30s dall'ultimo battito (prima 120s); si auto-corregge: se lavora, torna subito collegato
     // Consegna PARZIALE (più fatture, alcune consegnate ma non tutte): mostra quali, in ordine numerico.
     if(multiplo && deliv.length > 0){
       return { cls:'st-part', txt:'Consegnato ' + descriviAssegnazioneBreve(deliv), done:false, on:recent, corso:recent, block:false, part:true };
