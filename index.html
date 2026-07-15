@@ -18,6 +18,8 @@
   .ff-badge span.ff{font-weight:700; font-size:19px; letter-spacing:-1px; color:#254a86;}
   .ff-badge span.fold{position:absolute; top:0; right:0; width:0; height:0; border-top:15px solid #254a86; border-left:15px solid transparent;}
   .ff-word{font-weight:700; font-size:20px; line-height:1.05; color:#254a86;}
+  .esci-top{ margin-left:auto; background:#fff; border:1px solid #cdd9ea; color:#254a86; border-radius:8px; padding:7px 16px; font-family:inherit; font-size:14px; cursor:pointer; display:inline-flex; align-items:center; }
+  .esci-top:hover{ background:#f2f7fe; }
   .wrap{max-width:1360px; margin:0 auto; padding:28px 32px 48px;}
   .anag-panel{border:1px solid var(--line); border-radius:10px; padding:16px 18px; background:var(--page);}
   .card{background:var(--surface); border:1px solid var(--line); border-radius:14px; overflow:hidden;}
@@ -350,8 +352,11 @@
   .btn-consegna{ border:none; background:#e6b657; color:#4a3712; border-radius:10px; padding:8px 15px; font-family:inherit; font-size:14px; font-weight:700; cursor:pointer; display:inline-flex; align-items:center; }
   .btn-riammetti-classe{ background:#efeaf9; border:1px solid #9187db; color:#3C3489; border-radius:8px; padding:9px 15px; font-family:inherit; font-size:14px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; }
   .btn-riammetti-classe:hover{ filter:brightness(.97); }
-  .btn-archivio{ background:#C0B9EF; border:1px solid #9187db; color:var(--ink); border-radius:8px; padding:10px 16px; font-size:14px; line-height:16px; cursor:pointer; display:inline-flex; align-items:center; }
-  .btn-archivio:hover{ background:#b3abea; }
+  .btn-archivio{ background:#f6d99a; border:1px solid #e0b45f; color:#6b4e12; border-radius:8px; padding:10px 16px; font-size:14px; line-height:16px; cursor:pointer; display:inline-flex; align-items:center; }
+  .btn-archivio:hover{ background:#f1cd7f; }
+  /* Consegna classe + Riammetti classe: colore lavanda (ex Archivio compiti), NON in grassetto */
+  .btn-lavanda{ background:#C0B9EF; border:1px solid #9187db; color:var(--ink); border-radius:8px; padding:10px 16px; font-family:inherit; font-size:14px; font-weight:400; cursor:pointer; display:inline-flex; align-items:center; }
+  .btn-lavanda:hover{ background:#b3abea; }
   /* Archivio compiti — stile "ipotesi 5" (accento viola). Attivo solo quando #menu-fatture ha la classe .arch5 */
   #menu-fatture{ display:flex; justify-content:center; }
   #menu-fatture.arch5 .attesa-card{ background:#f6f5fc; }
@@ -507,6 +512,7 @@
     <div class="ff-badge"><span class="ff">FF</span><span class="fold"></span></div>
     <div class="ff-word">Fattura<br/>Facile</div>
     <div class="ff-sub" id="topbar-info"></div>
+    <button class="esci-top" id="btn-esci-top" style="display:none;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><path d="M14 8V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2v-2"/><path d="M9 12h12l-3-3m0 6 3-3"/></svg>Esci</button>
   </div>
 </header>
 
@@ -545,21 +551,22 @@
     <span class="pill" id="doc-classe">Nessuna classe caricata</span>
     <select id="sel-classe" class="sel-classe" style="display:none;"></select>
   </div>
-  <div class="toolbar-doc">
+  <div class="toolbar-doc" style="margin-bottom:10px;">
     <button class="btn-ghost" id="btn-carica-classe">Carica classe</button>
-    <button class="btn-ghost" id="btn-carica-verifica">Carica esercitazioni</button>
+    <button class="btn-ghost" id="btn-carica-verifica">Carica fatture</button>
     <input type="file" id="file-classe" accept=".json,application/json" style="display:none;" />
     <input type="file" id="file-verifica" accept=".json,application/json" style="display:none;" />
-    <button class="btn-consegna" id="btn-consegna-classe"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:7px;"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4z"/></svg>Consegna classe</button>
-    <button class="btn-riammetti-classe" id="btn-riammetti-classe"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:7px;"><path d="M9 14l-4 -4l4 -4"/><path d="M5 10h11a4 4 0 0 1 0 8h-1"/></svg>Riammetti classe</button>
     <button class="btn-ghost" id="btn-esporta-html">Esporta HTML</button>
-    <button class="btn-pubblica" id="btn-pubblica-voti"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:7px;"><path d="M3 11l18 -5v12l-18 -5v-2z"/><path d="M11.6 16.8a3 3 0 1 1 -5.8 -1.6"/></svg>Pubblica voti</button>
-    <button class="btn-archivio" id="btn-archivio-compiti"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#3C3489" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:7px;"><path d="M9 4h3l2 2h5a2 2 0 0 1 2 2v7a2 2 0 0 1 -2 2h-9a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2"/><path d="M17 17v2a2 2 0 0 1 -2 2h-9a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2h2"/></svg>Archivio compiti</button>
+    <button class="btn-archivio" id="btn-archivio-compiti"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:7px;"><path d="M9 4h3l2 2h5a2 2 0 0 1 2 2v7a2 2 0 0 1 -2 2h-9a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2"/><path d="M17 17v2a2 2 0 0 1 -2 2h-9a2 2 0 0 1 -2 -2v-9a2 2 0 0 1 2 -2h2"/></svg>Archivio compiti</button>
     <button class="btn-ghost" id="btn-backup">Backup</button>
     <button class="btn-ghost" id="btn-ripristina">Ripristina</button>
     <input type="file" id="file-ripristina" accept=".json,application/json" style="display:none;" />
     <button class="btn-red" id="btn-reset" style="margin-left:auto;">Reset classe</button>
-    <button class="btn-ghost" id="btn-esci-doc">Esci</button>
+  </div>
+  <div class="toolbar-doc">
+    <button class="btn-lavanda" id="btn-consegna-classe"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:7px;"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4z"/></svg>Consegna classe</button>
+    <button class="btn-lavanda" id="btn-riammetti-classe"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:7px;"><path d="M9 14l-4 -4l4 -4"/><path d="M5 10h11a4 4 0 0 1 0 8h-1"/></svg>Riammetti classe</button>
+    <button class="btn-pubblica" id="btn-pubblica-voti"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:7px;"><path d="M3 11l18 -5v12l-18 -5v-2z"/><path d="M11.6 16.8a3 3 0 1 1 -5.8 -1.6"/></svg>Pubblica voti</button>
   </div>
   <div class="toolbar-doc">
     <span style="font-size:14px; color:var(--muted);">Assegna a tutta la classe:</span>
@@ -3012,6 +3019,7 @@
     ['gate','docente','attesa','blocco','menu-fatture','editor','cortesia-view','soluzione-view','valuta-view'].forEach(function(x){ byId(x).style.display = (x===id) ? '' : 'none'; });
     var vb = byId('verifica-bar'); if(vb) vb.style.display = (id==='editor') ? '' : 'none';
     var tb = document.querySelector('.topbar'); if(tb) tb.style.display = (id==='gate') ? 'none' : '';
+    var et = byId('btn-esci-top'); if(et) et.style.display = (id==='docente') ? '' : 'none'; // «Esci» in alto solo nella dashboard docente
     if(id==='editor'){ document.querySelectorAll('#editor textarea').forEach(function(t){ autogrow(t); }); }
     window.scrollTo(0, 0);
   }
@@ -4431,7 +4439,7 @@
       }
     });
   });
-  byId('btn-esci-doc').addEventListener('click', goGate);
+  byId('btn-esci-top').addEventListener('click', goGate); // «Esci» docente ora è nella banda azzurra in alto
   byId('btn-esci-attesa').addEventListener('click', goGate);
   byId('btn-esci-blocco').addEventListener('click', goGate);
   byId('btn-esci-menu').addEventListener('click', function(){ if(STATE.menuBackFn){ var fn = STATE.menuBackFn; fn(); return; } goGate(); });
