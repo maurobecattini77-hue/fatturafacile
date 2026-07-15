@@ -2931,7 +2931,7 @@
     window.scrollTo(0, 0);
   }
   function goGate(){
-    stopAttesaWatcher(); stopPresenza(); stopCollegatiTimer(); stopBloccoWatcher(); stopConsegnaWatcher(); stopAssegnazioneWatcher(); stopSessioneWatcher(); STATE.riammesso = false; STATE.modalitaCompiti = false; STATE.solExitFn = null;
+    stopAttesaWatcher(); stopPresenza(); stopCollegatiTimer(); stopBloccoWatcher(); stopConsegnaWatcher(); stopAssegnazioneWatcher(); stopSessioneWatcher(); STATE.riammesso = false; STATE.modalitaCompiti = false; STATE.esercitazione = false; STATE.solExitFn = null;
     // «Esci»: cancello la presenza SOLO se ero il proprietario. Un dispositivo respinto che preme «Esci»
     // non deve far sparire dalla dashboard l'alunno vero, che sta lavorando.
     if(STATE.studente){ cloudClearPresenzaSeMia(STATE.studente.pin); STATE.studente = null; }
@@ -3202,7 +3202,7 @@
     // schermata di blocco). Da questo momento questo dispositivo è il PROPRIETARIO della sessione: è l'unico
     // autorizzato a scrivere e cancellare la presenza di questo PIN.
     STATE.proprietario = true;
-    STATE.modalitaCompiti = false;   // entrata in VERIFICA: la chiave del lavoro locale dev'essere quella verifica, non compiti
+    STATE.modalitaCompiti = false; STATE.esercitazione = false;   // entrata in VERIFICA: la chiave del lavoro locale dev'essere quella verifica, non compiti
     // Carico la bozza in corso già nel cloud PRIMA che l'alunno ricominci a scrivere: così, se ha più fatture
     // abbozzate, salvandone una non cancella le altre (la mappa parte piena, non da zero).
     STATE.bozzaMappa = {};
@@ -3357,6 +3357,11 @@
     // Alunno con più fatture: link per tornare al menù SENZA consegnare, per provare/finire le altre.
     // Il lavoro di questa fattura resta salvato (chiave ff_lavoro per fattura) e si ritrova riaprendola.
     if(STATE.modalitaCompiti && STATE.studente){
+      if(STATE.esercitazione){
+        var rc = document.createElement('span'); rc.className = 'link link-menu'; rc.textContent = '↻ Ricomincia da capo'; rc.style.marginRight = '14px';
+        rc.addEventListener('click', function(){ ricominciaEsercitazione(); });
+        top.appendChild(rc);
+      }
       var toC = document.createElement('span'); toC.className = 'link link-menu'; toC.textContent = '← Torna ai compiti'; toC.style.marginRight = '14px';
       toC.addEventListener('click', function(){ salvaLavoro(); renderCompitiPicker(); show('menu-fatture'); });
       top.appendChild(toC);
@@ -3366,8 +3371,12 @@
       top.appendChild(toMenu);
     }
     top.appendChild(out);
-    byId('cortesia-banner').innerHTML = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="#254a86" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:7px;"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z"/><path d="M9 13l6 0"/><path d="M9 17l6 0"/></svg>Questa è la tua <b>fattura di cortesia</b>, con i valori che hai inserito. Controllala bene prima di consegnare.';
+    var svgDoc = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="#254a86" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:7px;"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z"/><path d="M9 13l6 0"/><path d="M9 17l6 0"/></svg>';
+    byId('cortesia-banner').innerHTML = svgDoc + (STATE.esercitazione
+      ? 'Sei in <b>allenamento</b> su una fattura già consegnata: esercitati quanto vuoi, <b>non verrà inviata al prof</b>. A fine compilazione vedrai la soluzione a confronto.'
+      : 'Questa è la tua <b>fattura di cortesia</b>, con i valori che hai inserito. Controllala bene prima di consegnare.');
     byId('btnChiudi').style.display = ''; byId('btnIndietro').style.display = '';
+    byId('btnChiudi').textContent = STATE.esercitazione ? 'Fine — vedi soluzione' : 'Chiudi e consegna';
     if(!STATE.modalitaCompiti) cloudPresenza();
     show('editor');
   }
@@ -3505,7 +3514,9 @@
   // il lavoro non consegnato smette di vivere solo nel dispositivo dell'alunno e diventa recuperabile.
   // Chiave del salvataggio LOCALE del lavoro: DIVERSA per compiti e verifiche, così un compito fatto a casa
   // NON precompila la verifica sulla stessa fattura sullo stesso dispositivo. Compiti: ff_lavoroC_ ; verifiche: ff_lavoro_.
-  function chiaveLavoro(pin, id){ return 'ff_lavoro' + (STATE.modalitaCompiti ? 'C' : '') + '_' + pin + '_' + id; }
+  // Allenamento (esercitazione libera dopo la consegna): binario locale a sé ('E'), così NON tocca né la verifica
+  // ('') né il compito già consegnato ('C'). Resta sullo stesso dispositivo, non finisce mai nel cloud.
+  function chiaveLavoro(pin, id){ return 'ff_lavoro' + (STATE.esercitazione ? 'E' : (STATE.modalitaCompiti ? 'C' : '')) + '_' + pin + '_' + id; }
   function pushBozzaCloud(){
     if(!SB || !STATE.studente || !STATE.proprietario || STATE.modalitaCompiti) return;
     try{
@@ -3960,7 +3971,7 @@
   }
   // Maschera: TUTTE le fatture dell'archivio. Fatte → "✓ Consegnato" + "Vedi soluzione"; da fare → "Compila".
   function renderCompitiPicker(){
-    STATE.modalitaCompiti = true; STATE.menuBackFn = null; STATE.archivioMode = false;
+    STATE.modalitaCompiti = true; STATE.esercitazione = false; STATE.menuBackFn = null; STATE.archivioMode = false;
     byId('menu-fatture').classList.remove('arch5');
     var eb = byId('btn-esci-menu'); if(eb) eb.textContent = 'Esci';
     var nome = STATE.studente ? STATE.studente.nome : '';
@@ -3982,12 +3993,15 @@
         var d = document.createElement('span'); d.className = 'menu-done'; d.textContent = '✓ Consegnato'; cta.appendChild(d);
         var vs = document.createElement('button'); vs.className = 'btn-ghost'; vs.textContent = 'Vedi soluzione'; vs.style.marginLeft = '8px';
         vs.addEventListener('click', function(){ apriSoluzioneCompito(f); }); cta.appendChild(vs);
+        // Già consegnato: ora può ALLENARSI liberamente sulla stessa fattura, quante volte vuole. Nessun invio al prof.
+        var al = document.createElement('button'); al.className = 'btn-ghost'; al.textContent = 'Allenati'; al.style.marginLeft = '8px';
+        al.addEventListener('click', function(){ apriEsercitazione(f); }); cta.appendChild(al);
       } else {
         var b = document.createElement('button'); b.className = 'btn-compila'; b.textContent = 'Compila'; b.addEventListener('click', function(){ apriCompito(f); }); cta.appendChild(b);
       }
       row.appendChild(num); row.appendChild(info); row.appendChild(cta); list.appendChild(row);
     });
-    byId('menu-sub').textContent = 'Scegli una fattura, compilala e consegnala al prof. Dopo la consegna vedrai (e potrai stampare) la soluzione. Ogni fattura si compila una volta sola. (Fatte ' + fatti + ' su ' + tot + ')';
+    byId('menu-sub').textContent = 'Scegli una fattura, compilala e consegnala al prof. Dopo la consegna vedrai (e potrai stampare) la soluzione. Ogni fattura si consegna una volta sola; poi puoi allenarti quante volte vuoi (senza inviarla). (Fatte ' + fatti + ' su ' + tot + ')';
     // Se il docente ha PUBBLICATO la valutazione della verifica, mostra una card in cima (cliccabile).
     var pin0 = STATE.studente ? STATE.studente.pin : '';
     if(pin0){ cloudLeggiValutazione(pin0, function(val, snap){
@@ -4004,6 +4018,7 @@
   }
   function apriCompito(f){
     STATE.assegnataId = f.id; STATE.consegnata = false; STATE.solExitFn = null;
+    STATE.modalitaCompiti = true; STATE.esercitazione = false;   // consegna vera, non allenamento
     LIVELLO = 2; try{ localStorage.setItem('ff_livello', '2'); }catch(e){}
     entraAlunnoView();
   }
@@ -4042,6 +4057,42 @@
       dashboardCorretta: STATE.correctDashboardHTML || ''
     }] };
     mostraViewerCompiti(rec, 'alunno', function(){ renderCompitiPicker(); show('menu-fatture'); });
+  }
+
+  /* ===================== ALLENAMENTO (esercitazione libera, dopo la consegna) =====================
+     Riusa il compilatore dei compiti (bozza SOLO locale, mai nel cloud), ma:
+       • niente «Consegna al prof» → il tasto in fondo diventa «Fine» e mostra la soluzione a confronto;
+       • si può rifare quante volte si vuole (Ricomincia da capo);
+       • lasciandola a metà, si ritrova sullo STESSO dispositivo (chiave 'E'); su altri no. */
+  function apriEsercitazione(f){
+    if(!f) return;
+    STATE.assegnataId = f.id; STATE.consegnata = false; STATE.solExitFn = null;
+    STATE.modalitaCompiti = true; STATE.esercitazione = true;
+    LIVELLO = 2; try{ localStorage.setItem('ff_livello', '2'); }catch(e){}
+    entraAlunnoView();
+  }
+  // Come catturaConsegnaCorrente, ma SENZA salvare nulla nel cloud e senza marcare la fattura come consegnata.
+  function catturaEsercitazione(){
+    commitValues(byId('editor'));
+    lockEditor();
+    STATE.myDashboardHTML = byId('editor').innerHTML;
+    STATE.myCortesiaHTML = buildCortesia(raccogli());
+    STATE.correctCortesiaHTML = buildCortesia(STATE.soluzioneCorrente);
+    try{ mostraSoluzioneCompilatore(); commitValues(byId('editor')); STATE.correctDashboardHTML = byId('editor').innerHTML; }catch(e){ STATE.correctDashboardHTML = ''; }
+  }
+  function fineEsercitazione(){
+    showConfirm('Hai finito l\'allenamento? Vedrai la soluzione a confronto con la tua compilazione. Questo esercizio NON viene inviato al prof.', function(){
+      catturaEsercitazione();
+      // Allenamento concluso → la bozza locale riparte pulita al prossimo «Allenati» (resta un allenamento, non un lavoro in sospeso).
+      try{ localStorage.removeItem(chiaveLavoro(STATE.studente.pin, STATE.assegnataId)); }catch(e){}
+      mostraSoluzioneCompiti();
+    });
+  }
+  function ricominciaEsercitazione(){
+    showConfirm('Ricominciare l\'allenamento da capo? La compilazione attuale verrà azzerata.', function(){
+      try{ localStorage.removeItem(chiaveLavoro(STATE.studente.pin, STATE.assegnataId)); }catch(e){}
+      apriEsercitazione(FATTURE.find(function(x){ return x.id === STATE.assegnataId; }));
+    });
   }
 
   /* ===================== ARCHIVIO COMPITI A CASA (lato docente) ===================== */
@@ -4132,10 +4183,9 @@
       var exp = document.createElement('button'); exp.innerHTML = icoDl + 'Esporta archivio' + etichetta;
       exp.style.cssText = 'display:inline-flex; align-items:center; background:#eef3fb; border:1px solid #cddcf0; color:#254a86; border-radius:9px; padding:10px 18px; font-size:14px; line-height:16px; cursor:pointer;';
       exp.addEventListener('click', function(){ esportaCompitiHTML(cl); });
-      var svu = document.createElement('button'); svu.innerHTML = icoTr + 'Svuota' + etichetta;
-      svu.style.cssText = 'display:inline-flex; align-items:center; background:#fdece9; border:1px solid #f1c9c3; color:#b4472f; border-radius:9px; padding:10px 18px; font-size:14px; line-height:16px; cursor:pointer;';
-      svu.addEventListener('click', function(){ svuotaArchivioCompiti(cl); });
-      azioni.appendChild(exp); azioni.appendChild(svu); list.appendChild(azioni);
+      // «Svuota» RIMOSSO di proposito: l'archivio compiti non si cancella più. Cresce e basta (al massimo tutti fanno
+      // tutto). Chi vuole riprovare usa «Allenati» dalla maschera alunno: allenamento locale, senza inviare al prof.
+      azioni.appendChild(exp); list.appendChild(azioni);
     }
     var esci = byId('btn-esci-menu'); if(esci) esci.textContent = multiClasse ? '← Torna alle classi' : '← Torna alla dashboard';
     show('menu-fatture');
@@ -4339,6 +4389,7 @@
   byId('btnIndietro').addEventListener('click', function(){ show('editor'); });
   byId('btnChiudi').addEventListener('click', function(){
     if(STATE.consegnata) return;
+    if(STATE.esercitazione){ fineEsercitazione(); return; } // allenamento: nessun invio al prof, solo soluzione a confronto
     if(STATE.modalitaCompiti){ consegnaCompito(); return; } // compiti a casa: consegna + mostra soluzione
     var msgCons = STATE.multiMode
       ? 'Vuoi consegnare questa fattura? Una volta consegnata non potrai più modificarla né vedere le soluzioni.'
