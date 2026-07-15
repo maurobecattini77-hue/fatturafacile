@@ -4380,12 +4380,16 @@
   // con debounce, così NON viene duplicato dalle chiamate a wireEditor().
   (function(){
     var saveTimer = null;
+    function programmaSalva(ms){ if(saveTimer) clearTimeout(saveTimer); saveTimer = setTimeout(salvaLavoro, ms); }
     byId('editor').addEventListener('input', function(e){
       if(e && e.isTrusted) STATE.userTypedSinceLoad = true;   // SOLO digitazione VERA dell'alunno (le modifiche
                                                               // automatiche dell'editor hanno isTrusted=false)
-      if(saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(salvaLavoro, 600);
+      programmaSalva(600);
     });
+    // Salva ANCHE quando l'alunno esce da un campo: il "blur" applica la formattazione (es. 10000 -> 10.000)
+    // DOPO l'ultimo tasto, e senza questo il valore formattato non finiva mai nel cloud (cambiando dispositivo
+    // ricompariva "10000" grezzo). focusout bolla fino a #editor, blur no.
+    byId('editor').addEventListener('focusout', function(){ programmaSalva(200); });
   })();
   // Ricalcolo automatico LIVE: solo nel livello Automatica, quando l'alunno digita
   // quantità/prezzo/percentuali/spese o cambia l'IVA. I campi calcolati sono di sola
