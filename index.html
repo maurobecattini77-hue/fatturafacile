@@ -998,11 +998,13 @@
   function fatturaIniziata(pin, id){
     return iniziateLocali(pin).indexOf(id) !== -1 || consegnateLocali(pin).indexOf(id) !== -1;
   }
-  // Lista assegnata EFFETTIVA per un alunno (ad personam se c'è, altrimenti quella di classe).
+  // Lista assegnata EFFETTIVA per un alunno: SOLO la sua, ad personam. NIENTE ripiego su STATE.assegnate:
+  // quello era l'assegnazione di un COMPAGNO (STATE.assegnate = quella del primo alunno trovato), quindi un
+  // alunno a cui il docente aveva TOLTO la fattura mostrava lo stesso quella di classe, e la consegna forzata
+  // gli creava una "non svolta" fantasma. Se non ha nulla, la sua lista è vuota (nessuna assegnazione).
   function effectiveAssignedList(pin){
     var cs = CLOUD_STUD[pin] || {};
-    var per = parseAssegnazione(cs.fattura_assegnata);
-    return per.length ? per : (STATE.assegnate || []);
+    return parseAssegnazione(cs.fattura_assegnata);
   }
   // Sottoinsieme davvero consegnato (incrocio tra assegnate e tentativi cloud).
   function deliveredList(pin, assigned){
@@ -1808,6 +1810,14 @@
   // (dashboard o compiti a casa). NON sovrascrive la configurazione globale: dell'archivio aggiorna solo le
   // fatture, e della lista "compiti a casa" tocca SOLO questa classe. Le altre classi restano intatte.
   // Le consegne si ri-inseriscono senza cancellare nulla: i compiti fatti nel frattempo non si perdono.
+  // Nel ripristino: vince il voto ATTUALE del cloud se il backup non ne ha uno, oppure se il cloud è PIÙ RECENTE
+  // (confronto la data ISO dentro la valutazione). Così un voto vecchio del backup non cancella una rivalutazione.
+  function vinceVotoCloud(votoBackup, votoCloud){
+    if(!votoCloud) return false;
+    if(!votoBackup) return true;
+    var d = function(v){ return (v && v.data) ? String(v.data) : ''; };
+    return d(votoCloud) > d(votoBackup);
+  }
   function ripristinaClasse(j){
     if(!SB){ showAlert('Cloud non disponibile.'); return; }
     if(!j || !Array.isArray(j.studenti) || !j.studenti.length){ showAlert('File di backup non valido.'); return; }
@@ -1834,7 +1844,11 @@
       var righe = studenti.map(function(s){
         var r = {}; for(var k in s) r[k] = s[k];
         var ora = attuali[s.pin];
-        if(!r.valutazione && ora && ora.valutazione){
+        var oraVal = ora && ora.valutazione;
+        // Tengo SEMPRE il voto PIÙ RECENTE tra quello del backup e quello attuale nel cloud (vedi vinceVotoCloud).
+        // Prima si teneva il voto attuale SOLO se il backup non ne aveva uno: così un voto vecchio nel backup
+        // poteva sovrascrivere in silenzio una rivalutazione più recente.
+        if(oraVal && vinceVotoCloud(r.valutazione, oraVal)){
           r.valutazione = ora.valutazione;
           r.valutazione_snapshot = ora.valutazione_snapshot;
           votiSalvati++;
@@ -1989,8 +2003,7 @@
       if(abtn){
         // Tiene aggiornato il TESTO del pulsante (l'assegnazione resta sempre modificabile).
         var cs2 = CLOUD_STUD[a.pin] || {};
-        var perTxt2 = parseAssegnazione(cs2.fattura_assegnata);
-        var effList2 = perTxt2.length ? perTxt2 : (STATE.assegnate || []);
+        var effList2 = parseAssegnazione(cs2.fattura_assegnata); // SOLO la sua (niente ripiego sull'assegnazione di un compagno)
         abtn.textContent = descriviAssegnazioneBreve(effList2);
         abtn.title = descriviAssegnazione(effList2);
       }
@@ -3140,8 +3153,7 @@
       if(!FATTURE.length){ tdAss.textContent = '—'; }
       else {
         // L'assegnazione è SEMPRE modificabile dal docente (anche se l'alunno ha iniziato o consegnato).
-        var perList = parseAssegnazione(cs.fattura_assegnata);
-        var effList = perList.length ? perList : (STATE.assegnate || []);
+        var effList = parseAssegnazione(cs.fattura_assegnata); // SOLO la sua (niente ripiego sull'assegnazione di un compagno)
         var btnA = document.createElement('button'); btnA.className = 'btn-scegli-ass mini';
         btnA.textContent = descriviAssegnazioneBreve(effList);
         btnA.title = effList.length ? ('Clicca per modificare le fatture di ' + a.nome + ':  ' + descriviAssegnazione(effList)) : 'Clicca per assegnare fatture a questo alunno';
