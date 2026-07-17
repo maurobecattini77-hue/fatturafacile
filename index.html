@@ -4998,7 +4998,7 @@
     });
     cloudSetModalitaCompiti(j.classe || '', false); // ricaricare una classe la riporta in dashboard (esce da modalità compiti)
     // Seed immediato di CLOUD_STUD (l'upsert è asincrono): la nuova classe compare subito nella tendina, senza sostituire le altre.
-    j.alunni.forEach(function(a){ if(!a.pin) return; if(!CLOUD_STUD[a.pin]) CLOUD_STUD[a.pin] = { pin:a.pin, stato:'non_iniziato' }; var cs = CLOUD_STUD[a.pin]; cs.nome = a.nome; cs.cognome = a.cognome; cs.classe = j.classe || ''; cs.stato = 'non_iniziato'; cs.consegnata = false; cs.riammesso = false; cs.ultimo_accesso = null; cs.fattura_assegnata = null; cs.livello_assegnato = null; cs.fattura_corrente = null; cs.valutazione = null; cs.valutazione_snapshot = null; });
+    j.alunni.forEach(function(a){ if(!a.pin) return; if(!CLOUD_STUD[a.pin]) CLOUD_STUD[a.pin] = { pin:a.pin, stato:'non_iniziato' }; var cs = CLOUD_STUD[a.pin]; cs.nome = a.nome; cs.cognome = a.cognome; cs.classe = j.classe || ''; cs.stato = 'non_iniziato'; cs.consegnata = false; cs.riammesso = false; cs.ultimo_accesso = null; cs.fattura_assegnata = null; cs.livello_assegnato = null; cs.fattura_corrente = null; cs.valutazione = null; cs.valutazione_snapshot = null; cs.assente = false; });
     STATE.classeAttiva = j.classe || '';
     CLASSE = j; try{ localStorage.setItem('ff_classe', JSON.stringify(j)); }catch(e){}
     renderDocente();
