@@ -2146,32 +2146,25 @@
       + '.pdf-page:last-child{page-break-after:auto;}'
       + '.pdf-head{border-bottom:2px solid #254a86;padding-bottom:8px;margin-bottom:12px;}'
       + '.pdf-hrow{display:flex;align-items:baseline;justify-content:space-between;gap:12px;}'
-      + '.pdf-nome{font-size:23px;font-weight:700;color:#254a86;}'
-      + '.pdf-quando{font-size:13px;color:#5b6b82;white-space:nowrap;}'
+      + '.pdf-nome{font-size:25px;font-weight:700;color:#254a86;}'
+      + '.pdf-quando{font-size:14px;color:#5b6b82;white-space:nowrap;}'
       + '.pdf-quando b{color:#254a86;font-weight:700;}'
-      + '.pdf-voto-pill{font-size:15px;font-weight:700;color:#254a86;background:#eef3fb;border:1px solid #cddcf0;border-radius:20px;padding:5px 16px;white-space:nowrap;}'
-      + '.pdf-sub{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#5c8b73;margin-top:5px;}'
+      + '.pdf-voto-pill{font-size:16px;font-weight:700;color:#254a86;background:#eef3fb;border:1px solid #cddcf0;border-radius:20px;padding:5px 16px;white-space:nowrap;}'
+      + '.pdf-sub{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#5c8b73;margin-top:5px;}'
       + '.pdf-sub.corr{color:#254a86;}'
-      + '.pdf-page .cx-page{max-width:none;box-shadow:none;border:1px solid #dbe4f2;margin:0;font-size:11px;line-height:1.22;}'
-      + '.pdf-page .cx-muted{line-height:1.22;}'
-      // La fattura, compattata quel tanto da stare in UNA pagina anche quando ha molte righe (Mauro: sempre una pagina).
-      + '.pdf-page .cx-head{padding:10px 18px;}'
-      + '.pdf-page .cx-seller{font-size:15.5px;margin-bottom:2px;}'
-      + '.pdf-page .cx-doc-title{font-size:17.5px;}'
-      + '.pdf-page .cx-dest{margin-top:8px;padding:7px 12px;}'
-      + '.pdf-page .cx-body{padding:8px 18px 3px;}'
-      + '.pdf-page .cx-items thead th{padding:3px 6px;}'
-      + '.pdf-page .cx-items tbody td{padding:2px 6px;}'
-      + '.pdf-page .cx-sumwrap{padding:2px 18px 0;}'
-      + '.pdf-page .cx-row{padding:1px 0;}'
-      + '.pdf-page .cx-pay{margin:6px 18px 0;font-size:11px;}'
-      + '.pdf-page .cx-note{margin:6px 18px 0;padding-top:6px;font-size:10px;}'
+      // Caratteri GRANDI (Mauro: c'e' un mare di spazio bianco). Le fatture complesse che sforerebbero vengono
+      // poi rimpicciolite da sole (auto-fit con zoom, vedi sotto), quindi qui non serve piu' comprimere tutto.
+      + '.pdf-page .cx-page{max-width:none;box-shadow:none;border:1px solid #dbe4f2;margin:0;font-size:13px;line-height:1.38;}'
+      + '.pdf-page .cx-seller{font-size:20px;}'
+      + '.pdf-page .cx-doc-title{font-size:23px;}'
+      + '.pdf-page .cx-pay{font-size:13px;}'
+      + '.pdf-page .cx-note{font-size:12px;}'
       + '.pdf-page .cx-foot{display:none;}'
-      + '.pdf-traccia{background:#f7f9fc;border:1px solid #e3ebf5;border-radius:10px;padding:8px 14px;margin-bottom:9px;}'
-      + '.pdf-traccia p{margin:0 0 3px;font-size:10px;line-height:1.28;color:#3a475c;}'
+      + '.pdf-traccia{background:#f7f9fc;border:1px solid #e3ebf5;border-radius:10px;padding:13px 18px;margin-bottom:14px;}'
+      + '.pdf-traccia p{margin:0 0 7px;font-size:12.5px;line-height:1.5;color:#3a475c;}'
       + '.pdf-traccia p:last-child{margin-bottom:0;}'
-      + '.pdf-mini{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#5b6b82;margin:0 0 4px;}'
-      + '.pdf-mini.alu{color:#5c8b73;margin:2px 0 5px;}'
+      + '.pdf-mini{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#5b6b82;margin:0 0 7px;}'
+      + '.pdf-mini.alu{color:#5c8b73;margin:4px 0 8px;}'
       + '.pdf-val-top{display:flex;gap:12px;background:#eef3fb;border:1px solid #cddcf0;border-radius:12px;padding:14px 16px;margin-bottom:12px;}'
       + '.pdf-vcell{flex:1;text-align:center;}'
       + '.pdf-vlab{font-size:11px;color:#5b6b82;margin-bottom:4px;}'
@@ -2210,11 +2203,26 @@
     var doc = '<!DOCTYPE html><html lang="it"><head><meta charset="utf-8"><title>Valutazioni ' + esc(classe) + '</title><style>' + css + pcss + '</style></head><body>' + body + '</body></html>';
     var ifr = document.createElement('iframe');
     ifr.setAttribute('aria-hidden', 'true');
-    ifr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+    // Larghezza = area stampabile di un A4 (210mm - 28mm di margini ≈ 688px a 96dpi): così quello che misuro
+    // a schermo e' gia' quello che uscira' in stampa. Fuori vista e invisibile.
+    ifr.style.cssText = 'position:fixed;left:-9999px;top:0;width:688px;height:1400px;border:0;visibility:hidden;';
     document.body.appendChild(ifr);
+    // AUTO-FIT: le fatture grandi si stampano grandi; quelle troppo alte per un A4 vengono rimpicciolite SOLO
+    // loro (zoom), quel tanto che basta a stare in una pagina. Cosi' i caratteri sono grandi per (quasi) tutte
+    // e le poche fatture complesse non costringono a rimpicciolire l'intero PDF.
+    function autoFit(){
+      try{
+        var docu = ifr.contentDocument; if(!docu) return;
+        var LIMITE = 965;   // altezza utile in px, con un margine di sicurezza sotto i ~1016 dell'A4
+        Array.prototype.forEach.call(docu.querySelectorAll('.pdf-page'), function(p){
+          var h = p.getBoundingClientRect().height;
+          if(h > LIMITE){ p.style.zoom = (LIMITE / h).toFixed(4); }
+        });
+      }catch(e){}
+    }
     var stampato = false;
-    function vai(){ if(stampato) return; stampato = true; try{ ifr.contentWindow.focus(); ifr.contentWindow.print(); }catch(e){ showAlert('Stampa non riuscita: ' + e.message); } }
-    ifr.onload = function(){ setTimeout(vai, 250); };   // do' tempo ai font/immagini di sistemarsi
+    function vai(){ if(stampato) return; stampato = true; autoFit(); try{ ifr.contentWindow.focus(); ifr.contentWindow.print(); }catch(e){ showAlert('Stampa non riuscita: ' + e.message); } }
+    ifr.onload = function(){ setTimeout(vai, 300); };   // do' tempo ai font/immagini di sistemarsi prima di misurare
     try{ ifr.contentWindow.onafterprint = function(){ setTimeout(function(){ if(ifr.parentNode) ifr.parentNode.removeChild(ifr); }, 300); }; }catch(e){}
     ifr.srcdoc = doc;
     setTimeout(function(){ if(!stampato) vai(); }, 1200);   // rete di sicurezza se onload non scatta
