@@ -189,6 +189,8 @@
   .banner{max-width:1360px; margin:0 auto 16px; padding:12px 18px; border-radius:10px; font-size:14px;}
   .banner-warn{background:#fff7ed; border:1px solid #fdba74; color:#9a3412;}
   .banner-cortesia{background:#eef3fb; border:1px solid #cddcf0; color:#254a86;}
+  /* Cartello «non svolta» in valutazione: l'alunno non e' mai entrato, non c'e' niente da mostrare. */
+  .cx-nonsvolta{max-width:820px; margin:0 auto; padding:40px 26px; text-align:center; color:#b4472f; font-weight:500; font-size:16px; background:#fff; border:1px solid var(--line); border-radius:6px;}
 
   /* ---- Riquadri importo dell'editor resi MODIFICABILI (stesso look dei .ro del cantiere) ---- */
   .imp-cell{width:100%; height:38px; box-sizing:border-box; border:1px solid var(--line); border-radius:8px; padding:0 12px; background:#fff; font-family:inherit; font-size:14px; font-weight:500; text-align:right; color:var(--ink); font-variant-numeric:tabular-nums;}
@@ -4333,13 +4335,16 @@
   function vcGo(){
     var f = VC.fatture[VC.cf] || {};
     if(VC.ct === 4){ vcRenderValutazione(); window.scrollTo(0, 0); return; }
+    var NS = '<div class="cx-nonsvolta">Questa fattura non è stata svolta.</div>';   // alunno mai entrato
     if(VC.ct <= 1){
-      var page = byId('soluzione-page'); page.innerHTML = (VC.ct === 0 ? (f.cortesiaAlunno || '<i>—</i>') : (f.cortesiaCorretta || '<i>—</i>'));
+      var page = byId('soluzione-page');
+      page.innerHTML = (VC.ct === 0 ? (f.nonSvolta ? NS : (f.cortesiaAlunno || '<i>—</i>')) : (f.cortesiaCorretta || '<i>—</i>'));
       var act = byId('sol-view-actions'); if(act){ act.innerHTML = ''; act.style.display = 'none'; }
       var ban = byId('sol-view-banner'); ban.className = ''; ban.style.cssText = 'margin-bottom:16px;'; ban.innerHTML = ''; ban.appendChild(vcBarNode());
       show('soluzione-view');
     } else {
-      var ed = byId('editor'); ed.innerHTML = (VC.ct === 2 ? (f.dashboardAlunno || '') : (f.dashboardCorretta || '')); ed.classList.add('sol-mode');
+      var ed = byId('editor');
+      ed.innerHTML = (VC.ct === 2 ? (f.nonSvolta ? NS : (f.dashboardAlunno || '')) : (f.dashboardCorretta || '')); ed.classList.add('sol-mode');
       var sb = byId('sol-banner');
       if(sb){ sb.style.cssText = 'display:block; max-width:1360px; margin:0 auto 16px; padding:0; background:transparent; border:none; color:inherit; font-weight:400;'; sb.innerHTML = ''; sb.appendChild(vcBarNode()); }
       show('editor');
@@ -4473,6 +4478,28 @@
       }catch(e){ vaMale(e.message); }
     } else { vaBene(); }
   }
+  // Ricostruisce la «versione corretta» (cortesia + dashboard) di una fattura partendo dalla soluzione
+  // in archivio, usando l'editor del docente (in dashboard e' fermo) e rimettendolo pulito dopo.
+  // Serve in valutazione quando l'alunno NON e' mai entrato: quegli HTML li genera il dispositivo
+  // dell'alunno mentre lavora, e se non entra nessuno li produce → la scheda «corretta» restava vuota
+  // e la pagina sembrava rotta. Cosi' la ricostruisco io: vale anche per le consegne forzate gia' fatte.
+  function correttaDaArchivio(fatturaId){
+    var f = (typeof FATTURE !== 'undefined' && FATTURE) ? FATTURE.find(function(y){ return y.id === fatturaId; }) : null;
+    if(!f || !f.soluzione) return { cort:'', dash:'' };
+    var cort = '', dash = '';
+    try{ cort = buildCortesia(f.soluzione); }catch(e){}
+    try{
+      var ed = byId('editor');
+      var solPrec = STATE.soluzioneCorrente;
+      STATE.soluzioneCorrente = f.soluzione;
+      mostraSoluzioneCompilatore(true);   // silenzioso: riempie l'editor con la soluzione, non lo mostra
+      commitValues(ed);
+      dash = ed.innerHTML;
+      STATE.soluzioneCorrente = solPrec;
+    }catch(e){}
+    try{ resetEditor(); }catch(e){}       // rimetto l'editor del docente pulito
+    return { cort:cort, dash:dash };
+  }
   function apriValutazione(a){
     if(!SB){ showAlert('Cloud non disponibile.'); return; }
     var assigned = effectiveAssignedList(a.pin);
@@ -4492,9 +4519,13 @@
         // Prima era solo `!rr`: i segnaposto passavano per consegne vuote e tu non distinguevi
         // «non l'ha mai fatta» da «l'ha consegnata in bianco».
         var mai = !rr || !!rr.nonSvolta;
+        // La «versione corretta» puo' mancare (alunno mai entrato): la ricostruisco dall'archivio.
+        var cortCorr = rr ? (rr.cortesiaCorretta || '') : '';
+        var dashCorr = rr ? (rr.dashboardCorretta || '') : '';
+        if(!cortCorr || !dashCorr){ var rc = correttaDaArchivio(x.id); if(!cortCorr) cortCorr = rc.cort; if(!dashCorr) dashCorr = rc.dash; }
         return { id:x.id, num:numeroFattura(x.id), nonSvolta:mai,
-          cortesiaAlunno: rr ? (rr.cortesiaAlunno || '') : '', cortesiaCorretta: rr ? (rr.cortesiaCorretta || '') : '',
-          dashboardAlunno: rr ? (rr.dashboardAlunno || '') : '', dashboardCorretta: rr ? (rr.dashboardCorretta || '') : '' };
+          cortesiaAlunno: rr ? (rr.cortesiaAlunno || '') : '', cortesiaCorretta: cortCorr,
+          dashboardAlunno: rr ? (rr.dashboardAlunno || '') : '', dashboardCorretta: dashCorr };
       });
       var val = (CLOUD_STUD[a.pin] || {}).valutazione || null;
       mostraViewerCompiti({ pin:a.pin, nome:(a.cognome + ' ' + a.nome).trim(), cognome:(a.cognome || ''), valutazione:val, cf:0, fatture:fatture }, 'valuta', function(){ show('docente'); renderDocente(); });
