@@ -2043,7 +2043,7 @@
       rows.forEach(function(r){ var rr=r.risposte||{}; if(!byPin[r.pin]) byPin[r.pin]={};
         // Anti-race: una consegna VERA (nonSvolta=false) non viene mai sovrascritta da una «non svolta» arrivata dopo.
         var cur = byPin[r.pin][r.fattura_id]; if(cur && !cur.nonSvolta && rr.nonSvolta) return;
-        byPin[r.pin][r.fattura_id] = { titolo:(rr.titolo||r.fattura_id||''), nonSvolta:(rr.nonSvolta||false), cortesiaAlunno:(rr.cortesiaAlunno||''), cortesiaCorretta:(rr.cortesiaCorretta||''), dashboardAlunno:(rr.dashboardAlunno||''), dashboardCorretta:(rr.dashboardCorretta||''), cognome:(rr.cognome||''), nome:(rr.nome||'') }; });
+        byPin[r.pin][r.fattura_id] = { titolo:(rr.titolo||r.fattura_id||''), nonSvolta:(rr.nonSvolta||false), cortesiaAlunno:(rr.cortesiaAlunno||''), cortesiaCorretta:(rr.cortesiaCorretta||''), dashboardAlunno:(rr.dashboardAlunno||''), dashboardCorretta:(rr.dashboardCorretta||''), cognome:(rr.cognome||''), nome:(rr.nome||''), consegna:(r.created_at||'') }; });
       // SOLO gli alunni della CLASSE ATTIVA. Prima l'export ciclava su tutti gli alunni del cloud: nel file
       // intitolato «Classe 3B» finivano dentro anche quelli della 3A. Filtro sul REGISTRO della classe (non sul
       // campo 'classe' della riga, che può essere stato timbrato male dal dispositivo dell'alunno).
@@ -2072,12 +2072,12 @@
           // (2) Mai entrato: al posto del vuoto, lo SCHELETRO vuoto (fattura e dashboard come all'inizio) + cartello.
           var cortAl = t.cortesiaAlunno || '', dashAl = t.dashboardAlunno || '';
           if(ns){
-            var bannerNS = '<div class="cx-nonsvolta">Fattura non svolta — l\'alunno non è mai entrato nella verifica.</div>';
+            var bannerNS = '<div class="cx-nonsvolta">Fattura non compilata</div>';
             var skelCort = buildCortesia({ t:{}, r:{totaleMerce:'',imponibile:'',iva:'',totFatt:''}, articoli:[], scontiGen:[], spese:{accessoria:[],anticipata:[],cauzione:[],interessi:[]} });
             cortAl = bannerNS + skelCort;
             dashAl = bannerNS + ((typeof PRISTINE_EDITOR !== 'undefined' && PRISTINE_EDITOR) ? PRISTINE_EDITOR : '');
           }
-          return { num:numeroFattura(x.id), titolo:t.titolo, nonSvolta:ns, cortesiaAlunno:cortAl, cortesiaCorretta:cortCorr, dashboardAlunno:dashAl, dashboardCorretta:dashCorr };
+          return { num:numeroFattura(x.id), titolo:t.titolo, nonSvolta:ns, consegna:(t.consegna||''), cortesiaAlunno:cortAl, cortesiaCorretta:cortCorr, dashboardAlunno:dashAl, dashboardCorretta:dashCorr };
         });
         var cvs = (CLOUD_STUD[pin] || {}).valutazione || null;
         data.push({ pin:pin, nome:nomeCompleto, cognome:cognome, nums:fatture.map(function(f){ return f.num; }).join(' · '), fatture:fatture, val:cvs, voto:(cvs ? cvs.voto_finale : ''), perc:(cvs && cvs.perc != null ? cvs.perc : null) });
@@ -2110,20 +2110,42 @@
     h += '</div>';
     return h;
   }
+  // Data e ora dell'ULTIMA consegna, in orario italiano. Importante per Mauro: se un alunno consegna in
+  // classe e poi il docente lo riammette e lui ritocca da casa, questo orario diventa quello del ritocco,
+  // e stona rispetto ai compagni (tutti a fine ora) → si vede che è stato riaperto dopo.
+  function pdfQuando(iso){
+    if(!iso) return '';
+    try{
+      var d = new Date(iso); if(isNaN(d.getTime())) return '';
+      var g = d.toLocaleDateString('it-IT', { timeZone:'Europe/Rome', day:'2-digit', month:'2-digit', year:'numeric' });
+      var o = d.toLocaleTimeString('it-IT', { timeZone:'Europe/Rome', hour:'2-digit', minute:'2-digit' });
+      return 'Consegnata il <b>' + g + '</b> alle <b>' + o + '</b>';
+    }catch(e){ return ''; }
+  }
   function stampaPdfConsegne(data, classe){
     var css=''; document.querySelectorAll('style').forEach(function(st){ css += st.textContent + '\n'; });
+    // Una PAGINA: intestazione (nome + data/ora oppure voto + sottotitolo) e sotto il contenuto.
+    function pagina(nome, quandoHtml, sub, corr, votoPill, contenuto){
+      var destra = votoPill ? ('<div class="pdf-voto-pill">' + votoPill + '</div>')
+                            : (quandoHtml ? ('<div class="pdf-quando">' + quandoHtml + '</div>') : '');
+      return '<div class="pdf-page"><div class="pdf-head"><div class="pdf-hrow">'
+        + '<div class="pdf-nome">' + esc(nome) + '</div>' + destra
+        + '</div><div class="pdf-sub' + (corr ? ' corr' : '') + '">' + sub + '</div></div>'
+        + contenuto + '</div>';
+    }
     var pcss = '@page{size:A4;margin:14mm;}'
       + 'body{background:#fff;margin:0;color:#26324a;font-family:inherit;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-      + '.pdf-al{page-break-after:always;padding:0 4px;}'
-      + '.pdf-al:last-child{page-break-after:auto;}'
-      + '.pdf-head{border-bottom:2px solid #254a86;padding-bottom:10px;margin-bottom:16px;display:flex;align-items:baseline;justify-content:space-between;gap:12px;}'
-      + '.pdf-nome{font-size:22px;font-weight:700;color:#254a86;}'
-      + '.pdf-cls{font-size:13px;color:#5b6b82;}'
-      + '.pdf-voto-pill{font-size:14px;font-weight:700;color:#254a86;background:#eef3fb;border:1px solid #cddcf0;border-radius:20px;padding:5px 14px;white-space:nowrap;}'
-      + '.pdf-lab{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#5c8b73;margin:16px 0 7px;}'
-      + '.pdf-lab.corr{color:#254a86;}'
-      + '.pdf-al .cx-page{max-width:none;box-shadow:none;border:1px solid #dbe4f2;page-break-inside:avoid;margin:0;}'
-      + '.pdf-val{margin-top:18px;page-break-inside:avoid;}'
+      + '.pdf-page{page-break-after:always;}'
+      + '.pdf-page:last-child{page-break-after:auto;}'
+      + '.pdf-head{border-bottom:2px solid #254a86;padding-bottom:10px;margin-bottom:18px;}'
+      + '.pdf-hrow{display:flex;align-items:baseline;justify-content:space-between;gap:12px;}'
+      + '.pdf-nome{font-size:23px;font-weight:700;color:#254a86;}'
+      + '.pdf-quando{font-size:13px;color:#5b6b82;white-space:nowrap;}'
+      + '.pdf-quando b{color:#254a86;font-weight:700;}'
+      + '.pdf-voto-pill{font-size:15px;font-weight:700;color:#254a86;background:#eef3fb;border:1px solid #cddcf0;border-radius:20px;padding:5px 16px;white-space:nowrap;}'
+      + '.pdf-sub{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#5c8b73;margin-top:5px;}'
+      + '.pdf-sub.corr{color:#254a86;}'
+      + '.pdf-page .cx-page{max-width:none;box-shadow:none;border:1px solid #dbe4f2;margin:0;}'
       + '.pdf-val-top{display:flex;gap:12px;background:#eef3fb;border:1px solid #cddcf0;border-radius:12px;padding:14px 16px;margin-bottom:12px;}'
       + '.pdf-vcell{flex:1;text-align:center;}'
       + '.pdf-vlab{font-size:11px;color:#5b6b82;margin-bottom:4px;}'
@@ -2132,21 +2154,23 @@
       + '.pdf-vrow{border:1px solid #e3e7ee;border-radius:10px;padding:12px 14px;margin-bottom:10px;}'
       + '.pdf-vrh{font-weight:600;color:#254a86;margin-bottom:6px;}'
       + '.pdf-vg{white-space:pre-wrap;background:#f9fafb;border:1px solid #eef1f5;border-radius:8px;padding:9px 11px;font-size:14px;line-height:1.5;}';
+    var cl = esc(classe || '');
     var body = '';
     data.forEach(function(s){
+      var nome = s.nome || s.cognome || s.pin;
       var voto = (s.val && s.val.voto_finale) ? s.val.voto_finale : '—';
-      body += '<div class="pdf-al">'
-        + '<div class="pdf-head"><div><div class="pdf-nome">' + esc(s.nome || s.cognome || s.pin) + '</div>'
-        + '<div class="pdf-cls">' + (classe ? ('Classe ' + esc(classe) + ' &middot; ') : '') + 'Fatture ' + esc(s.nums || '') + '</div></div>'
-        + '<div class="pdf-voto-pill">Voto: ' + esc(String(voto)) + '</div></div>';
       (s.fatture || []).forEach(function(f){
-        body += '<div class="pdf-lab">Fattura n.' + esc(String(f.num)) + ' &middot; compilazione dell\'alunno</div>'
-          + '<div class="cx-page">' + (f.cortesiaAlunno || '<i>&#8212;</i>') + '</div>'
-          + '<div class="pdf-lab corr">Fattura n.' + esc(String(f.num)) + ' &middot; corretta</div>'
-          + '<div class="cx-page">' + (f.cortesiaCorretta || '<i>&#8212;</i>') + '</div>';
+        var q = pdfQuando(f.consegna);
+        // pagina: la fattura dell'alunno
+        body += pagina(nome, q, 'Classe ' + cl + ' &middot; Fattura n.' + esc(String(f.num)) + ' — dell\'alunno', false, '',
+          '<div class="cx-page">' + (f.cortesiaAlunno || '<i>&#8212;</i>') + '</div>');
+        // pagina: la fattura corretta
+        body += pagina(nome, q, 'Classe ' + cl + ' &middot; Fattura n.' + esc(String(f.num)) + ' — corretta', true, '',
+          '<div class="cx-page">' + (f.cortesiaCorretta || '<i>&#8212;</i>') + '</div>');
       });
-      body += pdfValutazioneBlocco(s.val);
-      body += '</div>';
+      // pagina finale: la valutazione col voto e i commenti
+      body += pagina(nome, '', 'Classe ' + cl + ' &middot; Valutazione', false, 'Voto: ' + esc(String(voto)),
+        pdfValutazioneBlocco(s.val));
     });
     var doc = '<!DOCTYPE html><html lang="it"><head><meta charset="utf-8"><title>Valutazioni ' + esc(classe) + '</title><style>' + css + pcss + '</style></head><body>' + body + '</body></html>';
     var ifr = document.createElement('iframe');
@@ -4438,7 +4462,7 @@
     // vuoto — la fattura e la dashboard come le vede l'alunno all'inizio, senza numeri — PIÙ un cartello che
     // avverte che non è entrato. Così «entrato ma non ha compilato» (scheletro, niente cartello) e «non ci ha
     // nemmeno provato» (scheletro identico + cartello) si distinguono a colpo d'occhio.
-    var bannerNS = '<div class="cx-nonsvolta">Fattura non svolta — l\'alunno non è mai entrato nella verifica.</div>';
+    var bannerNS = '<div class="cx-nonsvolta">Fattura non compilata</div>';
     var skelCort = f.nonSvolta ? buildCortesia({ t:{}, r:{totaleMerce:'',imponibile:'',iva:'',totFatt:''}, articoli:[], scontiGen:[], spese:{accessoria:[],anticipata:[],cauzione:[],interessi:[]} }) : '';
     var skelDash = (typeof PRISTINE_EDITOR !== 'undefined' && PRISTINE_EDITOR) ? PRISTINE_EDITOR : '';
     if(VC.ct <= 1){
