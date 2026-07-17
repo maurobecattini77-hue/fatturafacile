@@ -2446,6 +2446,30 @@
       }, function(){ cb && cb(); });
     }catch(e){ cb && cb(); }
   }
+  /* Rilegge dal cloud SOLO l'archivio delle fatture (niente assegnazioni: quelle hanno una loro logica).
+     Serve perché la copia in localStorage è solo una scorta per partire subito e per stare offline, ma la
+     verità è nel cloud. Senza questa rilettura un dispositivo che aveva già aperto l'app restava per
+     sempre sulle fatture vecchie: al boot FATTURE veniva riempito dalla cache, e ogni richiesta al cloud
+     era protetta da un «solo se FATTURE è vuoto» che quindi non scattava mai. Chi aggiungeva una fattura
+     la vedeva solo sui dispositivi mai usati prima.
+     Se il cloud non risponde si tiene la copia locale e si va avanti: meglio le fatture vecchie che niente. */
+  function cloudAggiornaArchivio(cb){
+    if(!SB){ cb && cb(false); return; }
+    try{
+      SB.from('fatt_config').select('archivio').eq('id', 1).maybeSingle().then(function(res){
+        var cfg = (res && res.data) ? res.data : null;
+        if(cfg && cfg.archivio){
+          try{
+            FATTURE = adattaArchivio(cfg.archivio);
+            buildRubrica();
+            try{ localStorage.setItem('ff_archivio', JSON.stringify(FATTURE)); }catch(e){}
+            cb && cb(true); return;
+          }catch(e){}
+        }
+        cb && cb(false);
+      }, function(){ cb && cb(false); });
+    }catch(e){ cb && cb(false); }
+  }
   function previewTesto(f){
     var d = f && f.testo && f.testo.discorsivo;
     if(d && d.manuale && d.manuale.length) return d.manuale.join('\n\n');
@@ -4609,7 +4633,7 @@
       });
     };
     if((typeof FATTURE==='undefined' || !FATTURE || !FATTURE.length) && SB){ cloudCaricaContesto(function(){ go(); }); }
-    else go();
+    else cloudAggiornaArchivio(function(){ go(); });   // sempre: la maschera dei compiti deve mostrare l'archivio di ADESSO
   }
   // Maschera: TUTTE le fatture dell'archivio. Fatte → "✓ Consegnato" + "Vedi soluzione"; da fare → "Compila".
   function renderCompitiPicker(){
@@ -4951,10 +4975,11 @@
     buildRubrica();
     var al = (CLASSE && CLASSE.alunni) ? CLASSE.alunni.find(function(a){ return a.pin === pin; }) : null;
     if(al){
-      // Se le fatture non ci sono (o non sono ancora arrivate), le prendo dal cloud PRIMA di entrare:
-      // senza archivio l'alunno resterebbe piantato su «In attesa» pur avendo la verifica assegnata.
+      // Le fatture le prendo dal cloud PRIMA di entrare, SEMPRE: senza archivio l'alunno resterebbe
+      // piantato su «In attesa» pur avendo la verifica assegnata, e con l'archivio vecchio in cache
+      // vedrebbe le fatture di ieri (o non troverebbe affatto una fattura aggiunta dopo).
       if(typeof FATTURE === 'undefined' || !FATTURE || !FATTURE.length){ cloudCaricaContesto(function(){ entraStudente(al); }); }
-      else { entraStudente(al); }
+      else { cloudAggiornaArchivio(function(){ entraStudente(al); }); }
       return;
     }
     // non in locale: cerca nel cloud (accesso da un altro dispositivo)
@@ -5211,6 +5236,10 @@
   try{ var a = localStorage.getItem('ff_archivio'); if(a) FATTURE = JSON.parse(a); }catch(e){}
   try{ var g = localStorage.getItem('ff_assegnata'); if(g){ STATE.assegnate = parseAssegnazione(g); STATE.assegnataId = assegnPrimoId(g); } }catch(e){}
   buildRubrica();
+  // La riga qui sopra ha appena riempito FATTURE con la COPIA salvata su questo dispositivo (per partire
+  // subito e per stare offline). Ora chiedo al cloud l'archivio vero e aggiorno: senza questa richiesta il
+  // docente che aggiunge una fattura non la vede mai sul suo PC, perché la copia vecchia vince per sempre.
+  cloudAggiornaArchivio(function(){});
   PRISTINE_EDITOR = byId('editor').innerHTML;
   wireEditor();
   recomputeAll();
