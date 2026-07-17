@@ -922,12 +922,21 @@
   /* ================= Cloud (Supabase) — passo 1a ================= */
   var SB = null;
   try{ if(window.supabase){ SB = window.supabase.createClient('https://zwuutlrafdmfqexbnohc.supabase.co', 'sb_publishable_6oCmDuDh_8ibf-p4ZAcfZg_muXXuO8N'); } }catch(e){}
-  function cloudUpsertClasse(j){
-    if(!SB || !j || !Array.isArray(j.alunni)) return;
+  // cb(ok, errore): «Carica classe» e' l'atto che mette gli alunni NEL CLOUD. Se fallisce, loro col PIN
+  // non entrano proprio (per il sistema non esistono), quindi l'esito non si puo' ignorare: prima l'app
+  // diceva «Classe caricata: 10 alunni» anche quando il cloud non aveva ricevuto niente, e te ne accorgevi
+  // in aula, con la classe che non riesce ad accedere.
+  function cloudUpsertClasse(j, cb){
+    if(!SB || !j || !Array.isArray(j.alunni)){ if(cb) cb(false, 'cloud non disponibile'); return; }
     // Ricaricare una classe = foglio bianco: azzero anche stato e valutazioni, così il vecchio
     // voto/verifica non resta appiccicato dopo un Reset. È l'atto con cui riparte una nuova verifica.
     var rows = j.alunni.map(function(a){ return { pin:a.pin, nome:a.nome, cognome:a.cognome, classe:j.classe||'', ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false, valutazione:null, valutazione_snapshot:null }; });
-    try{ SB.from('fatt_studenti').upsert(rows, { onConflict:'pin' }).then(function(){}, function(){}); }catch(e){}
+    try{
+      SB.from('fatt_studenti').upsert(rows, { onConflict:'pin' }).then(function(res){
+        if(!res || res.error){ if(cb) cb(false, (res && res.error && res.error.message) || 'nessuna risposta'); return; }
+        if(cb) cb(true);
+      }, function(){ if(cb) cb(false, 'nessuna risposta'); });
+    }catch(e){ if(cb) cb(false, e.message); }
   }
   function cloudSetArchivio(j){
     if(!SB || !j) return;
@@ -1023,8 +1032,12 @@
     if(!SB){ cb && cb(); return; }
     try{
       SB.from('fatt_tentativi').select('pin,fattura_id').eq('completato', true).neq('modalita', 'compiti').then(function(res){
+        // come sopra: se il cloud non risponde tengo l'elenco delle consegne che avevo, non lo azzero.
+        // Azzerarlo faceva sparire i badge «Consegnato 4 · 7» e disarmava la rete di sicurezza che
+        // riconosce come consegnato chi il lavoro l'ha davvero mandato.
+        if(!res || res.error){ cb && cb(); return; }
         CLOUD_CONS = {};
-        ((res && res.data) || []).forEach(function(t){ if(!t.pin || !t.fattura_id) return; (CLOUD_CONS[t.pin] = CLOUD_CONS[t.pin] || {})[t.fattura_id] = true; });
+        ((res.data) || []).forEach(function(t){ if(!t.pin || !t.fattura_id) return; (CLOUD_CONS[t.pin] = CLOUD_CONS[t.pin] || {})[t.fattura_id] = true; });
         cb && cb();
       }, function(){ cb && cb(); });
     }catch(e){ cb && cb(); }
@@ -1051,11 +1064,15 @@
     // Metto al sicuro l'ultimissimo lavoro in locale PRIMA di bloccare l'editor: se il cloud fallisce, al rientro
     // (entraAlunnoView / apriCompito) l'alunno ritrova esattamente quello che aveva scritto e può riprovare.
     try{ commitValues(byId('editor')); localStorage.setItem(chiaveLavoro(pin, id), JSON.stringify({ esercizioId:id, html: byId('editor').innerHTML, ts: Date.now() })); }catch(e){}
-    lockEditor();
+    // FOTOGRAFO PRIMA DI BLOCCARE. lockEditor() mette readonly/disabled, e quegli attributi RESTANO SCRITTI
+    // dentro l'HTML: fotografando dopo, il lavoro finiva nel cloud congelato in SOLA LETTURA. Poi il docente
+    // riammetteva l'alunno, lui rientrava da un altro dispositivo, si ritrovava la sua fattura... e non poteva
+    // piu' scriverci niente. (Per i lavori GIA' salvati bloccati c'e' sbloccaEditorRipristinato, al recupero.)
     STATE.myDashboardHTML = byId('editor').innerHTML;
+    lockEditor();
     STATE.myCortesiaHTML = buildCortesia(raccogli());
     STATE.correctCortesiaHTML = buildCortesia(STATE.soluzioneCorrente);
-    try{ mostraSoluzioneCompilatore(); commitValues(byId('editor')); STATE.correctDashboardHTML = byId('editor').innerHTML; }catch(e){ STATE.correctDashboardHTML = ''; }
+    try{ mostraSoluzioneCompilatore(true); commitValues(byId('editor')); STATE.correctDashboardHTML = byId('editor').innerHTML; }catch(e){ STATE.correctDashboardHTML = ''; }
     cloudSalvaConsegna(function(ok){
       // Il marker locale "consegnata" (solo verifiche) si mette SOLO se il cloud ha confermato: così una consegna
       // fallita non risulta "già consegnata" (che farebbe saltare la ri-cattura nella consegna forzata).
@@ -1100,7 +1117,11 @@
     lista.forEach(function(x){
       if(done.indexOf(x.id) !== -1) return;                                  // già consegnata davvero
       var raw = null; try{ raw = localStorage.getItem(chiaveLavoro(pin, x.id)); }catch(e){}
-      if(!raw) return;                                                       // mai aperta/nessun lavoro → la marca il docente
+      // Guardo ANCHE la bozza nel cloud: se l'alunno e' rientrato su questo dispositivo dopo uno «Sblocca»,
+      // il suo lavoro sta in STATE.bozzaMappa ma NON nel localStorage di questa macchina. Prima veniva
+      // ignorato e finiva marcato «non svolta» dal docente.
+      var haBozza = !!(STATE.bozzaMappa && STATE.bozzaMappa[x.id]);
+      if(!raw && !haBozza) return;                                           // mai aperta/nessun lavoro → la marca il docente
       try{ catturaFatturaPerForzata(x); }catch(e){}
     });
     try{ SB.from('fatt_studenti').update({ stato:'consegnato', consegnata:true, fattura_corrente:null }).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
@@ -1123,7 +1144,14 @@
     var ripristinato = false;
     try{
       var raw = localStorage.getItem(chiaveLavoro(STATE.studente.pin, x.id));
-      if(raw){ var saved = JSON.parse(raw); if(saved && saved.esercizioId === x.id && saved.html){ byId('editor').innerHTML = saved.html; wireEditor(); reidrataDinamici(); ripristinato = true; } }
+      var htmlLav = null;
+      if(raw){ var saved = JSON.parse(raw); if(saved && saved.esercizioId === x.id && saved.html) htmlLav = saved.html; }
+      // se su questa macchina non c'e' la copia locale, uso la bozza del cloud (vedi consegnaForzataLocale)
+      if(!htmlLav && STATE.bozzaMappa && STATE.bozzaMappa[x.id]){
+        var b = STATE.bozzaMappa[x.id];
+        htmlLav = (typeof b === 'string') ? b : (b && b.html);
+      }
+      if(htmlLav){ byId('editor').innerHTML = htmlLav; wireEditor(); reidrataDinamici(); sbloccaEditorRipristinato(); ripristinato = true; }
     }catch(e){}
     applicaLivello(LIVELLO, !ripristinato); // se ho ripristinato il lavoro, NON azzero le anagrafiche già compilate
     aggiornaNeretto();
@@ -1436,6 +1464,11 @@
       if(byId('attesa').style.display !== 'none' || byId('blocco').style.display !== 'none') return; // gestiti altrove
       cloudLeggiContestoAlunno(STATE.studente.pin, function(ctx){
         if(!STATE.studente || STATE.assModaleAperta) return;
+        // (0) IL CLOUD NON HA RISPOSTO (wifi ballerino): non so nulla, quindi NON FACCIO NULLA.
+        //     Senza questa riga un buco di rete di 30s veniva scambiato per «il docente ha resettato»:
+        //     l'alunno veniva sbattuto fuori dalla verifica e riversato nei compiti a casa, la sua presenza
+        //     cancellata, e la «Consegna classe» lo saltava perché ormai risultava «Non collegato».
+        if(!ctx || ctx.errore){ STATE.resetConferme = 0; return; }
         // (1) Il docente ha RIAMMESSO l'alunno mentre è in sessione (anche fermo sul menù "tutte consegnate"):
         //     tutte le fatture tornano DA CONSEGNARE, col suo lavoro salvato dentro.
         if(ctx && ctx.riammesso && STATE.consegnata && !STATE.riammConsumando){ applicaRiammissioneInSessione(); return; }
@@ -1447,10 +1480,17 @@
         // classe). La sua sessione non ha più senso: lo scollego e CANCELLO la sua presenza dal cloud.
         // Senza questo, una scheda lasciata aperta continua a pingare ogni 30s e resuscita l'alunno come
         // «Collegato» su una dashboard che il docente ha appena azzerato: il classico fantasma.
+        // CINTURA DI SICUREZZA: buttare fuori un alunno dalla verifica è irreversibile per lui, quindi lo
+        // faccio solo dopo DUE letture pulite di fila che dicono la stessa cosa. Una risposta strana isolata
+        // (rete che torna a metà, riga letta mentre il docente sta scrivendo) non basta più.
         if(!nuova.length){
-          if((STATE.mieAssegnate || []).length) terminaSessionePerReset();
+          if((STATE.mieAssegnate || []).length){
+            STATE.resetConferme = (STATE.resetConferme || 0) + 1;
+            if(STATE.resetConferme >= 2) terminaSessionePerReset();
+          }
           return;
         }
+        STATE.resetConferme = 0;
         if(assegnazioniUguali(nuova, STATE.mieAssegnate)) return; // nessun cambio
         var vecchia = STATE.mieAssegnate || [];
         var nuoveId = {}; nuova.forEach(function(x){ nuoveId[x.id] = true; });
@@ -1557,6 +1597,48 @@
   }
   // Consegna forzata SEMPRE lato docente (affidabile, indipendente dal dispositivo dell'alunno):
   // legge FRESCO dal cloud cosa ha davvero consegnato, poi marca «non svolta» SOLO le fatture mancanti e segna consegnato.
+  // Avviso UNICO (non 20 pop-up con una classe intera): la consegna forzata non e' riuscita per qualcuno.
+  function avvisaForzataFallita(nome){
+    STATE.forzataFalliti = (STATE.forzataFalliti || []);
+    if(STATE.forzataFalliti.indexOf(nome) === -1) STATE.forzataFalliti.push(nome);
+    if(STATE.forzataAvvisoTimer) clearTimeout(STATE.forzataAvvisoTimer);
+    STATE.forzataAvvisoTimer = setTimeout(function(){
+      var l = STATE.forzataFalliti || []; STATE.forzataFalliti = [];
+      if(!l.length) return;
+      showAlert('ATTENZIONE: la consegna NON e\' riuscita per ' + l.length + (l.length === 1 ? ' alunno' : ' alunni')
+        + ' (' + l.join(', ') + '). Il cloud non ha risposto. NON ho segnato niente, quindi il loro lavoro e\' intatto:'
+        + ' controlla la connessione e ripremi «Consegna classe».');
+    }, 1500);
+  }
+  // Salva il lavoro di un alunno partendo dalla sua BOZZA nel cloud, dal dispositivo del DOCENTE.
+  // Serve quando l'alunno e' scollegato (e' andato a casa, ha chiuso il portatile) ma il suo lavoro
+  // e' nel cloud: prima veniva marcato «non svolta» e il ragazzo prendeva zero pur avendo lavorato.
+  // Riusa l'editor del docente (che in dashboard non sta usando) per ricostruire cortesia e dashboard.
+  function catturaDaBozza(pin, x, html, nomeCompleto, cognome, classe){
+    var f = (typeof FATTURE !== 'undefined' && FATTURE) ? FATTURE.find(function(y){ return y.id === x.id; }) : null;
+    var ed = byId('editor');
+    var cortAl = '', dashAl = '', cortCorr = '', dashCorr = '';
+    try{
+      ed.innerHTML = html; wireEditor(); reidrataDinamici(); sbloccaEditorRipristinato(); commitValues(ed);
+      dashAl = ed.innerHTML;
+      cortAl = buildCortesia(raccogli());
+      if(f){
+        cortCorr = buildCortesia(f.soluzione);
+        var solPrec = STATE.soluzioneCorrente;
+        STATE.soluzioneCorrente = f.soluzione;
+        mostraSoluzioneCompilatore(true); commitValues(ed); dashCorr = ed.innerHTML;
+        STATE.soluzioneCorrente = solPrec;
+      }
+    }catch(e){}
+    try{ resetEditor(); }catch(e){}   // rimetto l'editor del docente pulito
+    try{
+      SB.from('fatt_tentativi').insert({ pin:pin, classe:classe, fattura_id:x.id, modalita:'forzata', completato:true,
+        risposte:{ titolo:(f ? f.titolo : x.id), nome:nomeCompleto, cognome:cognome, nonSvolta:false,
+                   cortesiaAlunno:cortAl, cortesiaCorretta:cortCorr, dashboardAlunno:dashAl, dashboardCorretta:dashCorr,
+                   daBozza:true, data:new Date().toISOString() } }).then(function(){}, function(){});
+    }catch(e){}
+    CLOUD_CONS[pin] = CLOUD_CONS[pin] || {}; CLOUD_CONS[pin][x.id] = true;
+  }
   function finalizzaConsegnaForzata(pin){
     if(!SB) return;
     var assigned = effectiveAssignedList(pin);
@@ -1573,6 +1655,10 @@
     var cognome = al ? (al.cognome||'') : '';
     try{
       SB.from('fatt_tentativi').select('id,fattura_id,completato,risposte').eq('pin', pin).neq('modalita', 'compiti').order('created_at', { ascending:true }).then(function(res){
+        // LA RETE NON HA RISPOSTO: non so cosa ha gia' consegnato, quindi NON SEGNO NIENTE. Prima invece
+        // res.data era null, done restava vuoto, e marcavo «non svolta» TUTTE le sue fatture: il lavoro
+        // vero spariva dall'export e l'alunno prendeva zero pur avendo fatto la verifica.
+        if(!res || res.error){ avvisaForzataFallita(nomeCompleto); return; }
         var done = {}, riapribile = {};
         ((res && res.data) || []).forEach(function(t){
           if(!t.fattura_id) return;
@@ -1581,37 +1667,73 @@
           var rr = t.risposte || {};
           if(!rr.nonSvolta && rr.dashboardAlunno) riapribile[t.fattura_id] = t.id;
         });
-        assigned.forEach(function(x){
-          if(done[x.id]) return; // già consegnata davvero → non toccare
-          // L'alunno è scollegato ma nel cloud c'è il suo lavoro (riaperto dal Riammetti): lo RICONSEGNO,
-          // invece di buttarlo via marcandolo «non svolta». Niente più lavoro perso.
-          if(riapribile[x.id]){
-            try{ SB.from('fatt_tentativi').update({ completato:true }).eq('id', riapribile[x.id]).then(function(){}, function(){}); }catch(e){}
+        // Prima di dichiarare «non svolta» qualcosa, guardo se l'alunno ha una BOZZA nel cloud: e' il caso
+        // classico di chi ha lavorato e se n'e' andato col portatile chiuso. Se il cloud non mi risponde
+        // nemmeno su questo, mi fermo: meglio non segnare che segnare il falso.
+        SB.from('fatt_studenti').select('bozza_corrente,classe').eq('pin', pin).maybeSingle().then(function(rb){
+          if(!rb || rb.error){ avvisaForzataFallita(nomeCompleto); return; }
+          var bozza = (rb.data && rb.data.bozza_corrente && typeof rb.data.bozza_corrente === 'object') ? rb.data.bozza_corrente : {};
+          var classeAlunno = (rb.data && rb.data.classe) || (CLOUD_STUD[pin] && CLOUD_STUD[pin].classe) || (CLASSE && CLASSE.classe) || '';
+          assigned.forEach(function(x){
+            if(done[x.id]) return; // già consegnata davvero → non toccare
+            // L'alunno è scollegato ma nel cloud c'è il suo lavoro (riaperto dal Riammetti): lo RICONSEGNO,
+            // invece di buttarlo via marcandolo «non svolta». Niente più lavoro perso.
+            if(riapribile[x.id]){
+              try{ SB.from('fatt_tentativi').update({ completato:true }).eq('id', riapribile[x.id]).then(function(){}, function(){}); }catch(e){}
+              CLOUD_CONS[pin] = CLOUD_CONS[pin] || {}; CLOUD_CONS[pin][x.id] = true;
+              return;
+            }
+            // Ha una bozza in corso per questa fattura: e' lavoro VERO, lo salvo io dal mio dispositivo.
+            var b = bozza[x.id];
+            var htmlBozza = b ? (typeof b === 'string' ? b : b.html) : null;
+            if(htmlBozza){ try{ catturaDaBozza(pin, x, htmlBozza, nomeCompleto, cognome, classeAlunno); return; }catch(e){} }
+            var f = (typeof FATTURE!=='undefined') ? FATTURE.find(function(y){ return y.id === x.id; }) : null;
+            var cortCorr = ''; try{ if(f) cortCorr = buildCortesia(f.soluzione); }catch(e){}
+            // anche qui: la classe è quella dell'ALUNNO (dal cloud), non quella attiva sul mio schermo
+            try{ SB.from('fatt_tentativi').insert({ pin:pin, classe:classeAlunno, fattura_id:x.id, modalita:'forzata', completato:true,
+              risposte:{ titolo:(f?f.titolo:x.id), nome:nomeCompleto, cognome:cognome, nonSvolta:true, cortesiaAlunno:'', cortesiaCorretta:cortCorr, dashboardAlunno:'', dashboardCorretta:'', data:new Date().toISOString() } }).then(function(){}, function(){}); }catch(e){}
             CLOUD_CONS[pin] = CLOUD_CONS[pin] || {}; CLOUD_CONS[pin][x.id] = true;
-            return;
-          }
-          var f = (typeof FATTURE!=='undefined') ? FATTURE.find(function(y){ return y.id === x.id; }) : null;
-          var cortCorr = ''; try{ if(f) cortCorr = buildCortesia(f.soluzione); }catch(e){}
-          // anche qui: la classe è quella dell'ALUNNO (dal cloud), non quella attiva sul mio schermo
-          try{ SB.from('fatt_tentativi').insert({ pin:pin, classe:((CLOUD_STUD[pin]&&CLOUD_STUD[pin].classe)||(CLASSE&&CLASSE.classe)||''), fattura_id:x.id, modalita:'forzata', completato:true,
-            risposte:{ titolo:(f?f.titolo:x.id), nome:nomeCompleto, cognome:cognome, nonSvolta:true, cortesiaAlunno:'', cortesiaCorretta:cortCorr, dashboardAlunno:'', dashboardCorretta:'', data:new Date().toISOString() } }).then(function(){}, function(){}); }catch(e){}
-          CLOUD_CONS[pin] = CLOUD_CONS[pin] || {}; CLOUD_CONS[pin][x.id] = true;
-        });
-        try{ SB.from('fatt_studenti').update({ stato:'consegnato', consegnata:true, fattura_corrente:null }).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
-        if(CLOUD_STUD[pin]){ CLOUD_STUD[pin].stato = 'consegnato'; CLOUD_STUD[pin].consegnata = true; }
-        renderDocente(); // riflette subito lo stato (poi il refresh periodico riconcilia col cloud)
-      }, function(){});
+          });
+          try{ SB.from('fatt_studenti').update({ stato:'consegnato', consegnata:true, fattura_corrente:null }).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
+          if(CLOUD_STUD[pin]){ CLOUD_STUD[pin].stato = 'consegnato'; CLOUD_STUD[pin].consegnata = true; }
+          renderDocente(); // riflette subito lo stato (poi il refresh periodico riconcilia col cloud)
+        }, function(){ avvisaForzataFallita(nomeCompleto); });
+      }, function(){ avvisaForzataFallita(nomeCompleto); });
     }catch(e){}
   }
   function forzaConsegnaClasse(){
     if(!(CLASSE && CLASSE.alunni && CLASSE.alunni.length)){ showAlert('Nessuna classe caricata.'); return; }
-    var targets = CLASSE.alunni.filter(function(a){ var st = statoAlunno(a.pin); return st.on || st.part; });
-    if(!targets.length){ showAlert('Nessun alunno in corso: non c\'è niente da consegnare.'); return; }
-    showConfirm('Consegnare ORA la verifica per i ' + targets.length + (targets.length===1?' alunno':' alunni') + ' che hanno iniziato? Viene salvato il lavoro che hanno fatto finora (come se consegnassero loro). Solo una fattura mai aperta risulterà «non svolta». Chi non ha iniziato non viene toccato.', function(){
-      targets.forEach(function(a){ forzaConsegna(a.pin); });
-      refreshCloudStud(function(){ refreshConsegne(renderDocente); });
-      showAlert('Consegna in corso per ' + targets.length + (targets.length===1?' alunno':' alunni') + '. Attendi qualche secondo che i dispositivi salvino il lavoro.');
-    });
+    var cl = (CLASSE.classe || '');
+    // CHI HA LAVORATO MA NON E' PIU' COLLEGATO NON DEVE ESSERE SALTATO. Prima i destinatari erano solo
+    // st.on || st.part: l'alunno che aveva lavorato mezz'ora e poi aveva chiuso il portatile (o era rimasto
+    // senza rete) veniva IGNORATO dalla «Consegna classe» — nessuna consegna, lavoro sepolto nella bozza,
+    // invisibile nell'export: zero in pagella pur avendo fatto la verifica. Ora chiedo al cloud chi ha una
+    // bozza in corso e includo anche loro (il loro lavoro lo salvo io, da qui: vedi catturaDaBozza).
+    var prosegui = function(conLavoro, letturaOk){
+      var targets = CLASSE.alunni.filter(function(a){ var st = statoAlunno(a.pin); return st.on || st.part || conLavoro[a.pin]; });
+      if(!targets.length){ showAlert('Nessun alunno in corso: non c\'è niente da consegnare.'); return; }
+      var scollegatiConLavoro = targets.filter(function(a){ var st = statoAlunno(a.pin); return !st.on && !st.part && conLavoro[a.pin]; }).length;
+      showConfirm('Consegnare ORA la verifica per i ' + targets.length + (targets.length===1?' alunno':' alunni') + ' che hanno iniziato? Viene salvato il lavoro che hanno fatto finora (come se consegnassero loro).'
+        + (scollegatiConLavoro ? ('\n\n🛟 Ne includo ' + scollegatiConLavoro + (scollegatiConLavoro===1 ? ' che non è più collegato ma ha lavoro salvato nel cloud: lo recupero io.' : ' che non sono più collegati ma hanno lavoro salvato nel cloud: lo recupero io.')) : '')
+        + (letturaOk ? '' : '\n\n⚠ Non sono riuscito a controllare chi ha lavoro non consegnato (rete): potrei saltare qualche alunno scollegato. Se puoi, riprova.')
+        + '\n\nSolo una fattura mai aperta risulterà «non svolta». Chi non ha iniziato non viene toccato.', function(){
+        targets.forEach(function(a){ forzaConsegna(a.pin); });
+        refreshCloudStud(function(){ refreshConsegne(renderDocente); });
+        showAlert('Consegna in corso per ' + targets.length + (targets.length===1?' alunno':' alunni') + '. Attendi qualche secondo che i dispositivi salvino il lavoro.');
+      });
+    };
+    if(!SB || !cl){ prosegui({}, false); return; }
+    try{
+      SB.from('fatt_studenti').select('pin,bozza_corrente').eq('classe', cl).then(function(res){
+        if(!res || res.error){ prosegui({}, false); return; }
+        var conLavoro = {};
+        ((res.data) || []).forEach(function(s){
+          var b = s.bozza_corrente;
+          if(b && typeof b === 'object' && Object.keys(b).length) conLavoro[s.pin] = true;
+        });
+        prosegui(conLavoro, true);
+      }, function(){ prosegui({}, false); });
+    }catch(e){ prosegui({}, false); }
   }
   // Sorvegliante schermata di blocco: appena il docente sblocca (riammesso), l'alunno entra da solo.
   function stopBloccoWatcher(){ if(STATE.bloccoTimer){ clearInterval(STATE.bloccoTimer); STATE.bloccoTimer = null; } }
@@ -1887,7 +2009,11 @@
     // Un ripristino NON deve MAI cancellare in silenzio un voto messo DOPO il backup: prima leggo i voti
     // attuali, e dove il backup non ne ha uno tengo quello che c'è già.
     SB.from('fatt_studenti').select('pin,valutazione,valutazione_snapshot').in('pin', pinsArr).then(function(resVoti){
-      var attuali = {}; ((resVoti && resVoti.data) || []).forEach(function(s){ attuali[s.pin] = s; });
+      // Se non riesco a leggere i voti ATTUALI mi fermo: senza saperli, il ripristino li sovrascriverebbe
+      // con quelli (vecchi) del backup e una valutazione fatta dopo il backup sparirebbe in silenzio.
+      // La rete caduta arrivava qui come "nessun voto trovato", cioe' esattamente come una classe senza voti.
+      if(!resVoti || resVoti.error){ showAlert('Ripristino ANNULLATO: non riesco a leggere i voti attuali dal cloud, e senza quelli rischierei di cancellarti una valutazione fatta dopo il backup. Non ho toccato niente: controlla la connessione e riprova.'); return; }
+      var attuali = {}; ((resVoti.data) || []).forEach(function(s){ attuali[s.pin] = s; });
       var votiSalvati = 0;
       var righe = studenti.map(function(s){
         var r = {}; for(var k in s) r[k] = s[k];
@@ -1981,7 +2107,13 @@
     if(!SB){ cb && cb(); return; }
     try{
       SB.from('fatt_studenti').select('pin,nome,cognome,classe,ultimo_accesso,fattura_corrente,livello_corrente,fattura_assegnata,livello_assegnato,consegnata,stato,riammesso,valutazione').then(function(res){
-        CLOUD_STUD = {}; ((res && res.data) || []).forEach(function(s){ CLOUD_STUD[s.pin] = s; });
+        // UN BUCO DI RETE NON DEVE CANCELLARE LA DASHBOARD. Prima CLOUD_STUD veniva azzerato PRIMA di
+        // guardare l'esito: con la rete giu' restava vuoto, renderDocente non trovava piu' nessuna classe,
+        // scriveva «Nessuna classe caricata» e cancellava pure ff_classe dal browser. Ogni 4 secondi.
+        // Ora, se il cloud non risponde, tengo l'ultima fotografia buona e riprovo al giro dopo.
+        if(!res || res.error){ cb && cb(); return; }
+        CLOUD_STUD = {}; ((res.data) || []).forEach(function(s){ CLOUD_STUD[s.pin] = s; });
+        STATE.cloudStudCaricato = true;   // da ora "nessuna classe" e' una risposta vera, non un "non lo so"
         cb && cb();
       }, function(){ cb && cb(); });
     }catch(e){ cb && cb(); }
@@ -2006,16 +2138,22 @@
       var loc = null, locL = null; try{ loc = localStorage.getItem('ff_assegnata') || null; locL = localStorage.getItem('ff_livello') || null; }catch(e){}
       cb && cb({ fattura:assegnPrimoId(loc), livello:(assegnPrimoLiv(loc) || locL), lista:parseAssegnazione(loc) }); return;
     }
-    var out = { fattura:null, livello:null, lista:[], stato:null, consegnata:false, riammesso:false };
+    // out.errore = "NON LO SO" (la rete non ha risposto). È diverso da "nessuna assegnazione": chi legge
+    // deve poter distinguere il silenzio del cloud da una risposta vera, altrimenti un buco di wifi viene
+    // scambiato per «il docente ha resettato la classe» e l'alunno viene buttato fuori dalla verifica.
+    var out = { fattura:null, livello:null, lista:[], stato:null, consegnata:false, riammesso:false, errore:false };
     try{
       SB.from('fatt_studenti').select('fattura_assegnata,livello_assegnato,stato,consegnata,riammesso').eq('pin', pin).maybeSingle().then(function(r1){
-        var per = (r1 && r1.data) ? r1.data : null;
+        // ATTENZIONE: supabase-js NON rifiuta la promessa quando la rete cade: RISOLVE con { data:null, error:... }.
+        // Senza questo controllo, un errore di rete arrivava qui travestito da "riga vuota" = nessuna assegnazione.
+        if(!r1 || r1.error){ out.errore = true; cb && cb(out); return; }
+        var per = r1.data ? r1.data : null;
         if(per){ out.stato = per.stato || null; out.consegnata = !!per.consegnata; out.riammesso = !!per.riammesso; }
         if(per && per.fattura_assegnata){ out.fattura = assegnPrimoId(per.fattura_assegnata); out.livello = assegnPrimoLiv(per.fattura_assegnata) || per.livello_assegnato || null; out.lista = parseAssegnazione(per.fattura_assegnata); cb && cb(out); return; }
         // MULTI-CLASSE: l'assegnazione è SOLO per-studente. Niente più fallback globale (sarebbe condiviso fra le classi).
         cb && cb(out);
-      }, function(){ cb && cb(out); });
-    }catch(e){ cb && cb(out); }
+      }, function(){ out.errore = true; cb && cb(out); });
+    }catch(e){ out.errore = true; cb && cb(out); }
   }
   // Decide la MODALITÀ dell'alunno all'accesso. Ritorna 'compiti' SOLO se: nessuna assegnazione (né sua né di
   // classe) E il docente NON è presente (battito vecchio > 60s). Altrimenti null = flusso normale
@@ -2024,11 +2162,16 @@
     if(!SB){ cb && cb(null); return; }
     try{
       SB.from('fatt_studenti').select('fattura_assegnata,classe').eq('pin', pin).maybeSingle().then(function(r1){
-        var per = (r1 && r1.data) ? r1.data : null;
+        // Rete caduta (supabase RISOLVE con {data:null,error}): NON so nulla → flusso normale, MAI 'compiti'.
+        // Prima, con la rete giù, cfg restava null → hb=Infinity → "docente assente" → l'alunno finiva nei
+        // compiti a casa NEL MEZZO DI UNA VERIFICA.
+        if(!r1 || r1.error){ cb && cb(null); return; }
+        var per = r1.data ? r1.data : null;
         if(per && per.fattura_assegnata){ cb && cb(null); return; } // ha un'assegnazione personale → normale (verifica)
         var cl = per ? per.classe : null;
         SB.from('fatt_config').select('docente_heartbeat,compiti_classi').eq('id', 1).maybeSingle().then(function(r2){
-          var cfg = (r2 && r2.data) ? r2.data : null;
+          if(!r2 || r2.error){ cb && cb(null); return; } // idem: senza risposta non posso dedurre l'assenza del docente
+          var cfg = r2.data ? r2.data : null;
           var compitiClassi = (cfg && Array.isArray(cfg.compiti_classi)) ? cfg.compiti_classi : [];
           if(cl && compitiClassi.indexOf(cl) !== -1){ cb && cb('compiti'); return; } // classe messa in modalità compiti dal Reset → compiti SEMPRE
           var hb = (cfg && cfg.docente_heartbeat) ? (Date.now() - new Date(cfg.docente_heartbeat).getTime()) : Infinity;
@@ -2909,9 +3052,21 @@
       merce[code] = round2(merce[code] + lordo);
       netta[code] = round2(netta[code] + running);
     });
-    // totaleMerce = somma dei netti riga (come da totaliAttesi)
-    var totaleMerce = round2(ta.totaleMerce || 0);
-    if(!totaleMerce){ order.forEach(function(c){ totaleMerce = round2(totaleMerce + netta[c]); }); }
+    // totaleMerce = somma dei netti riga. LO CALCOLO SEMPRE DALLE RIGHE, non mi fido di totaliAttesi.
+    // Storia: in ES09 l'archivio aveva totaleMerce=1254 (il LORDO) invece di 1155,60 (il netto): un solo
+    // numero sbagliato a mano. Il codice si fidava, e siccome l'ultima aliquota si prende tutto il residuo
+    // (vedi sotto), il castelletto della SOLUZIONE mostrava 288,40 al 22% invece di 190,00. Risultato: l'app
+    // dava due risposte "corrette" diverse sulla stessa fattura, e quella sbagliata era il riferimento del
+    // docente in fase di valutazione. Il calcolo dalle righe è l'unica verità: un refuso nell'archivio (ora
+    // che se ne aggiungono di nuove) non può più produrre una soluzione sbagliata. Se i due valori divergono
+    // lo segnalo qui sotto, ma vince sempre il calcolo.
+    var totaleMerce = 0;
+    order.forEach(function(c){ totaleMerce = round2(totaleMerce + netta[c]); });
+    try{
+      if(ta.totaleMerce != null && Math.abs(round2(ta.totaleMerce) - totaleMerce) > 0.011 && window.console && console.warn){
+        console.warn('Archivio: totaleMerce dichiarato ' + ta.totaleMerce + ' ma la somma dei netti è ' + totaleMerce + '. Uso la somma dei netti.');
+      }
+    }catch(e){}
     // sconto generale: applicato in sequenza sul totale merce
     var running = totaleMerce;
     (sol.scontiGenerali || []).forEach(function(s){ running = round2(running - round2(running * s.perc / 100)); });
@@ -3183,8 +3338,11 @@
         var chosen = CLASSES.find(function(x){ return x.classe === pref; }) || CLASSES[0];
         CLASSE = chosen; STATE.classeAttiva = chosen.classe;
       }
-    } else {
+    } else if(STATE.cloudStudCaricato){
       // Nessuna classe attiva (tutte in compiti o nessuna caricata): dashboard pulita.
+      // SOLO se il cloud ha DAVVERO risposto: prima questo ramo scattava anche al primo disegno della
+      // dashboard (quando i dati non erano ancora arrivati) o con la rete giu', e cancellava dal browser
+      // la classe caricata - «Nessuna classe caricata» e da ricaricare il file, magari a lezione iniziata.
       CLASSE = null; STATE.classeAttiva = null;
       try{ localStorage.removeItem('ff_classe'); }catch(e){}
     }
@@ -3320,15 +3478,28 @@
     // Carico la bozza in corso già nel cloud PRIMA che l'alunno ricominci a scrivere: così, se ha più fatture
     // abbozzate, salvandone una non cancella le altre (la mappa parte piena, non da zero).
     STATE.bozzaMappa = {};
-    try{
-      if(pin) SB.from('fatt_studenti').select('bozza_corrente').eq('pin', pin).maybeSingle().then(function(rb){
-        var b = (rb && rb.data) ? rb.data.bozza_corrente : null;
-        // FONDERE, non sostituire: se la lettura arriva in ritardo (rete lenta) DOPO che l'alunno ha già scritto,
-        // sostituire in blocco la mappa perderebbe la bozza appena salvata. Per ogni fattura tengo la versione
-        // PIÙ RECENTE (ts) tra quella del cloud e quella già in memoria; così non calpesto quello appena scritto.
-        if(b && typeof b === 'object'){ STATE.bozzaMappa = mergeBozzaCloud(STATE.bozzaMappa || {}, b); }
-      }, function(){});
-    }catch(e){}
+    // bozzaLetta = "so cosa c'e' nel cloud". Finche' e' false NON scrivo la mappa (vedi pushBozzaCloud):
+    // se la lettura fallisce per un buco di rete, la mappa resta vuota, e il primo salvataggio la
+    // riscriverebbe da zero CANCELLANDO dal cloud le bozze delle ALTRE fatture dell'alunno. Meglio
+    // riprovare a leggere (fino a 5 volte) e salvare nel cloud solo quando so cosa sto sovrascrivendo.
+    // Il salvataggio LOCALE intanto continua regolarmente: il lavoro non si ferma mai.
+    STATE.bozzaLetta = false;
+    var leggiBozzaCloud = function(tentativo){
+      if(!pin || !SB){ STATE.bozzaLetta = true; return; }
+      try{
+        SB.from('fatt_studenti').select('bozza_corrente').eq('pin', pin).maybeSingle().then(function(rb){
+          if(!rb || rb.error){ if(tentativo < 5) setTimeout(function(){ leggiBozzaCloud(tentativo + 1); }, 3000); return; }
+          var b = rb.data ? rb.data.bozza_corrente : null;
+          // FONDERE, non sostituire: se la lettura arriva in ritardo (rete lenta) DOPO che l'alunno ha già scritto,
+          // sostituire in blocco la mappa perderebbe la bozza appena salvata. Per ogni fattura tengo la versione
+          // PIÙ RECENTE (ts) tra quella del cloud e quella già in memoria; così non calpesto quello appena scritto.
+          if(b && typeof b === 'object'){ STATE.bozzaMappa = mergeBozzaCloud(STATE.bozzaMappa || {}, b); }
+          STATE.bozzaLetta = true;
+          pushBozzaCloud();   // se intanto l'alunno ha scritto, ora quel lavoro sale nel cloud
+        }, function(){ if(tentativo < 5) setTimeout(function(){ leggiBozzaCloud(tentativo + 1); }, 3000); });
+      }catch(e){}
+    };
+    leggiBozzaCloud(0);
     // Allinea le consegne LOCALI a quelle VERE del cloud, così il menù non mostra "consegnata" fantasma
     // rimaste da prove/verifiche precedenti (la verità è il cloud).
     rebuildConsegnateLocali(pin, function(){
@@ -3439,7 +3610,7 @@
       }
     }catch(e){}
     var ripristinato = false;
-    if(local){ byId('editor').innerHTML = local.html; wireEditor(); reidrataDinamici(); ripristinato = true; }
+    if(local){ byId('editor').innerHTML = local.html; wireEditor(); reidrataDinamici(); sbloccaEditorRipristinato(); ripristinato = true; }
     // Livello scelto dal DOCENTE in fase di assegnazione (predefinito Guidata).
     try{ var lvAss = localStorage.getItem('ff_livello'); if(lvAss) LIVELLO = Number(lvAss) || 2; }catch(e){}
     // Applica il livello: compone il testo e imposta le anagrafiche.
@@ -3462,6 +3633,7 @@
         byId('editor').innerHTML = res.html;
         wireEditor();
         reidrataDinamici();
+        sbloccaEditorRipristinato();                            // il lavoro salvato alla consegna arriva bloccato: lo riapro
         applicaLivello(LIVELLO, false);                         // NON azzerare le anagrafiche recuperate
         aggiornaNeretto();
         try{ salvaLavoro(); }catch(e){}                         // allineo il locale alla versione più fresca
@@ -3525,7 +3697,27 @@
     document.querySelectorAll('#editor input, #editor textarea').forEach(function(el){ if(!el.readOnly){ el.readOnly = true; el.classList.add('sol-lock'); } });
     document.querySelectorAll('#editor select').forEach(function(el){ if(!el.disabled){ el.disabled = true; el.classList.add('sol-lock'); } });
   }
-  function mostraSoluzioneCompilatore(){
+  // L'OPPOSTO ESATTO di lockEditor: toglie il lucchetto SOLO agli elementi che lockEditor aveva chiuso
+  // (li riconosce dalla classe 'sol-lock'), quindi non tocca i campi nati readonly (es. «Tipo documento»).
+  // Serve quando si RIPRISTINA un lavoro salvato al momento della consegna: quell'HTML si porta dietro i
+  // readonly/disabled, e senza questo l'alunno riammesso ritrovava la fattura ma non poteva piu' scriverci.
+  // Vale anche per i lavori gia' salvati bloccati in passato: si sbloccano al recupero.
+  function sbloccaEditorRipristinato(){
+    var ed = byId('editor'); if(!ed) return;
+    ed.classList.remove('sol-mode');
+    ed.querySelectorAll('.sol-lock').forEach(function(el){
+      if(el.tagName === 'SELECT') el.disabled = false; else el.readOnly = false;
+      el.classList.remove('sol-lock');
+    });
+  }
+  // silenzioso=true: RIEMPIE l'editor con la soluzione ma NON la mette a schermo. Serve a chi deve solo
+  // FOTOGRAFARLA per salvarla (catturaConsegnaCorrente, catturaEsercitazione).
+  // Storia: senza questo, consegnando una VERIFICA l'alunno vedeva la soluzione completa. La sequenza era:
+  // «Invio in corso...» (show blocco) → cattura → show('editor') con dentro la fattura CORRETTA → e solo
+  // quando il cloud rispondeva tornava «Verifica consegnata». Misurato dal vivo: 136 ms in rete locale,
+  // ma sul wifi di scuola sono SECONDI: il tempo di leggerla o fotografarla. E se la consegna falliva,
+  // l'alunno tornava a compilare avendo appena visto le risposte giuste.
+  function mostraSoluzioneCompilatore(silenzioso){
     var S = STATE.soluzioneCorrente;
     if(!S){ showAlert('Nessuna soluzione disponibile.'); return; }
     var sol = S, t = sol.t || {};
@@ -3598,7 +3790,7 @@
     // Sola lettura + modalita' soluzione
     lockEditor();
     byId('editor').classList.add('sol-mode');
-    show('editor');
+    if(!silenzioso) show('editor');   // in cattura NON si mostra: vedi il commento sopra
   }
 
   /* ---------- Stampa (solo la vista attiva) ---------- */
@@ -3636,6 +3828,7 @@
   function chiaveLavoro(pin, id){ return 'ff_lavoro' + (STATE.esercitazione ? 'E' : (STATE.modalitaCompiti ? 'C' : '')) + '_' + pin + '_' + id; }
   function pushBozzaCloud(){
     if(!SB || !STATE.studente || !STATE.proprietario || STATE.modalitaCompiti) return;
+    if(!STATE.bozzaLetta) return;   // non so ancora cosa c'e' nel cloud: scrivere ora cancellerebbe le altre bozze
     try{
       SB.from('fatt_studenti').update({ bozza_corrente: (STATE.bozzaMappa || {}) })
         .eq('pin', STATE.studente.pin).then(function(){}, function(){});
@@ -3940,10 +4133,28 @@
     // Istantanea dei lavori dell'alunno: serve alla vista alunno DOPO il Reset (che cancella le consegne verifica).
     var hasHtml = (VC.fatture || []).some(function(f){ return f.cortesiaAlunno || f.dashboardAlunno || f.cortesiaCorretta || f.dashboardCorretta; });
     if(hasHtml){ upd.valutazione_snapshot = { fatture: VC.fatture.map(function(f){ return { id:f.id, num:f.num, nonSvolta:!!f.nonSvolta, cortesiaAlunno:f.cortesiaAlunno || '', cortesiaCorretta:f.cortesiaCorretta || '', dashboardAlunno:f.dashboardAlunno || '', dashboardCorretta:f.dashboardCorretta || '' }; }) }; }
-    if(SB && VC.pin){ try{ SB.from('fatt_studenti').update(upd).eq('pin', VC.pin).then(function(){}, function(){}); }catch(e){} }
-    if(VC.pin){ if(!CLOUD_STUD[VC.pin]) CLOUD_STUD[VC.pin] = { pin:VC.pin }; CLOUD_STUD[VC.pin].valutazione = v; }
-    var s = byId('vv-sum'); if(s) s.innerHTML = vvSummaryHtml(v);
-    showAlert('Valutazione salvata per ' + (VC.nome || 'l\'alunno') + (v.voto_finale ? (' — voto ' + v.voto_finale) : '') + '. La ritrovi in dashboard.');
+    // IL VOTO SI DICHIARA SALVATO SOLO SE IL CLOUD L'HA DAVVERO PRESO. Prima l'esito era ignorato
+    // (.then(function(){},function(){})): con la rete giu' comparivano «Valutazione salvata» e il voto in
+    // dashboard, ma nel cloud non c'era niente. Al primo aggiornamento della dashboard il voto spariva,
+    // e il lavoro di correzione era da rifare senza sapere perche'.
+    var vaBene = function(){
+      if(VC.pin){ if(!CLOUD_STUD[VC.pin]) CLOUD_STUD[VC.pin] = { pin:VC.pin }; CLOUD_STUD[VC.pin].valutazione = v; }
+      var s = byId('vv-sum'); if(s) s.innerHTML = vvSummaryHtml(v);
+      showAlert('Valutazione salvata per ' + (VC.nome || 'l\'alunno') + (v.voto_finale ? (' — voto ' + v.voto_finale) : '') + '. La ritrovi in dashboard.');
+    };
+    var vaMale = function(perche){
+      VC.val = (VC.val && VC.val !== v) ? VC.val : v;   // il voto resta a schermo: non si perde niente
+      showAlert('VOTO NON SALVATO per ' + (VC.nome || 'l\'alunno') + ': il cloud non ha risposto' + (perche ? (' (' + perche + ')') : '')
+        + '. Quello che hai scritto e\' ancora qui: controlla la connessione e ripremi «Salva valutazione».');
+    };
+    if(SB && VC.pin){
+      try{
+        SB.from('fatt_studenti').update(upd).eq('pin', VC.pin).then(function(res){
+          if(!res || res.error){ vaMale(res && res.error && res.error.message); return; }
+          vaBene();
+        }, function(){ vaMale(null); });
+      }catch(e){ vaMale(e.message); }
+    } else { vaBene(); }
   }
   function apriValutazione(a){
     if(!SB){ showAlert('Cloud non disponibile.'); return; }
@@ -3993,12 +4204,33 @@
     if(!targets.length){ showAlert('Nessuna valutazione da pubblicare nella classe ' + cl + '. Valuta prima gli alunni.'); return; }
     var giaP = targets.filter(function(a){ return (CLOUD_STUD[a.pin] || {}).valutazione.pubblicata; }).length;
     showConfirm('Pubblicare i voti della classe ' + cl + '? ' + targets.length + (targets.length === 1 ? ' alunno valutato' : ' alunni valutati') + ' li vedranno entrando col PIN.' + (giaP ? (' (' + giaP + ' già pubblicati)') : ''), function(){
+      // Come per il salvataggio: si annuncia "pubblicati" solo per quelli che il cloud ha davvero preso.
+      // Prima l'esito era ignorato: con la rete ballerina Mauro leggeva «Voti pubblicati», i badge
+      // diventavano verdi, ma gli alunni non vedevano niente e nessuno se ne accorgeva.
+      var fatti = 0, falliti = [], rimasti = targets.length;
+      var finito = function(){
+        if(rimasti > 0) return;
+        renderDocente();
+        if(!falliti.length){
+          showAlert('Voti pubblicati per la classe ' + cl + ': ' + fatti + (fatti === 1 ? ' alunno.' : ' alunni. Entrando col PIN, ora vedono la loro valutazione.'));
+        } else {
+          showAlert('Pubblicati ' + fatti + ' voti su ' + targets.length + '. NON pubblicati per: ' + falliti.join(', ')
+            + ' (il cloud non ha risposto). I loro voti sono al sicuro: ripremi «Pubblica voti» quando la connessione torna.');
+        }
+      };
       targets.forEach(function(a){
-        var v = CLOUD_STUD[a.pin].valutazione; v.pubblicata = true;
-        if(SB){ try{ SB.from('fatt_studenti').update({ valutazione:v }).eq('pin', a.pin).then(function(){}, function(){}); }catch(e){} }
+        var v = CLOUD_STUD[a.pin].valutazione;
+        var nome = (a.cognome + ' ' + a.nome).trim();
+        if(!SB){ v.pubblicata = true; fatti++; rimasti--; finito(); return; }
+        var vPub = {}; for(var k in v) vPub[k] = v[k]; vPub.pubblicata = true;
+        try{
+          SB.from('fatt_studenti').update({ valutazione:vPub }).eq('pin', a.pin).then(function(res){
+            if(!res || res.error){ falliti.push(nome); }
+            else { v.pubblicata = true; fatti++; }   // il badge verde solo se il cloud ha confermato
+            rimasti--; finito();
+          }, function(){ falliti.push(nome); rimasti--; finito(); });
+        }catch(e){ falliti.push(nome); rimasti--; finito(); }
       });
-      renderDocente();
-      showAlert('Voti pubblicati per la classe ' + cl + ': ' + targets.length + (targets.length === 1 ? ' alunno.' : ' alunni. Entrando col PIN, ora vedono la loro valutazione.'));
     });
   }
 
@@ -4206,7 +4438,7 @@
     STATE.myDashboardHTML = byId('editor').innerHTML;
     STATE.myCortesiaHTML = buildCortesia(raccogli());
     STATE.correctCortesiaHTML = buildCortesia(STATE.soluzioneCorrente);
-    try{ mostraSoluzioneCompilatore(); commitValues(byId('editor')); STATE.correctDashboardHTML = byId('editor').innerHTML; }catch(e){ STATE.correctDashboardHTML = ''; }
+    try{ mostraSoluzioneCompilatore(true); commitValues(byId('editor')); STATE.correctDashboardHTML = byId('editor').innerHTML; }catch(e){ STATE.correctDashboardHTML = ''; }
   }
   function fineEsercitazione(){
     showConfirm('Hai finito l\'allenamento? Vedrai la soluzione a confronto con la tua compilazione. Questo esercizio NON viene inviato al prof.', function(){
@@ -4496,14 +4728,19 @@
   byId('file-ripristina').addEventListener('change', function(){ leggiFile(this, function(j){ ripristinaClasse(j); }); });
   byId('file-classe').addEventListener('change', function(){ leggiFile(this, function(j){
     if(!j || !Array.isArray(j.alunni)){ showAlert('Formato classe non riconosciuto: manca l\'elenco "alunni".'); return; }
-    cloudUpsertClasse(j);
+    cloudUpsertClasse(j, function(ok, err){
+      if(ok){
+        showAlert('Classe "' + (j.classe||'—') + '" caricata: ' + j.alunni.length + ' alunni. Se hai più classi, passi dall\'una all\'altra con la tendina in alto.');
+      } else {
+        showAlert('CLASSE NON CARICATA NEL CLOUD (' + (err || 'rete') + ').\n\nLa vedi qui sulla dashboard, ma i tuoi alunni NON riusciranno a entrare col PIN, perché per il sistema non esistono ancora.\n\nControlla la connessione e ripremi «Carica classe» PRIMA di far iniziare la verifica.');
+      }
+    });
     cloudSetModalitaCompiti(j.classe || '', false); // ricaricare una classe la riporta in dashboard (esce da modalità compiti)
     // Seed immediato di CLOUD_STUD (l'upsert è asincrono): la nuova classe compare subito nella tendina, senza sostituire le altre.
     j.alunni.forEach(function(a){ if(!a.pin) return; if(!CLOUD_STUD[a.pin]) CLOUD_STUD[a.pin] = { pin:a.pin, stato:'non_iniziato' }; var cs = CLOUD_STUD[a.pin]; cs.nome = a.nome; cs.cognome = a.cognome; cs.classe = j.classe || ''; cs.stato = 'non_iniziato'; cs.consegnata = false; cs.riammesso = false; cs.ultimo_accesso = null; cs.fattura_assegnata = null; cs.livello_assegnato = null; cs.fattura_corrente = null; cs.valutazione = null; cs.valutazione_snapshot = null; });
     STATE.classeAttiva = j.classe || '';
     CLASSE = j; try{ localStorage.setItem('ff_classe', JSON.stringify(j)); }catch(e){}
     renderDocente();
-    showAlert('Classe "' + (j.classe||'—') + '" caricata: ' + j.alunni.length + ' alunni. Se hai più classi, passi dall\'una all\'altra con la tendina in alto.');
   }); });
   byId('file-verifica').addEventListener('change', function(){ leggiFile(this, function(j){
     if(!j || !Array.isArray(j.fatture)){ showAlert('Formato archivio non riconosciuto: manca l\'elenco "fatture".'); return; }
