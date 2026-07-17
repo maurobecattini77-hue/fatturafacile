@@ -2015,7 +2015,7 @@
       + 'for(var k=0;k<d.fatture.length;k++){h+=\'<button class="exp-fbtn\'+(k===0?" active":"")+\'" data-f="\'+k+\'">Fattura \'+E(d.fatture[k].num)+\'</button>\';}'
       + 'h+=\'</div><div class="exp-tabs"><button class="exp-tab active" data-t="0">Fattura \'+E(cogn)+\'</button><button class="exp-tab" data-t="1">Fattura corretta</button><button class="exp-tab" data-t="2">Dashboard \'+E(cogn)+\'</button><button class="exp-tab" data-t="3">Dashboard corretta</button>\'+(d.val?\'<button class="exp-tab" data-t="4">Valutazione</button>\':"")+\'</div><div class="exp-content" id="exp-c"></div>\';'
       + 'el.innerHTML=h;el.querySelector(".exp-back").onclick=over;var cf=0,ct="0";var fb=el.querySelectorAll(".exp-fbtn");var tb=el.querySelectorAll(".exp-tab");'
-      + 'function render(){var f=d.fatture[cf];var c=document.getElementById("exp-c");var NS=\'<div class="exp-vuota">Questa fattura non è stata svolta.</div>\';if(ct==="0"){c.innerHTML=f.nonSvolta?NS:(\'<div class="cx-page">\'+(f.cortesiaAlunno||"<i>&#8212;</i>")+\'</div>\');}else if(ct==="1"){c.innerHTML=\'<div class="cx-page">\'+(f.cortesiaCorretta||"<i>&#8212;</i>")+\'</div>\';}else if(ct==="2"){c.innerHTML=f.nonSvolta?NS:(\'<div id="editor" class="wrap sol-mode">\'+(f.dashboardAlunno||"")+\'</div>\');}else if(ct==="3"){c.innerHTML=\'<div id="editor" class="wrap sol-mode">\'+(f.dashboardCorretta||"")+\'</div>\';}else if(ct==="4"){c.innerHTML=VALHTML(d);}}'
+      + 'function render(){var f=d.fatture[cf];var c=document.getElementById("exp-c");if(ct==="0"){c.innerHTML=\'<div class="cx-page">\'+(f.cortesiaAlunno||"<i>&#8212;</i>")+\'</div>\';}else if(ct==="1"){c.innerHTML=\'<div class="cx-page">\'+(f.cortesiaCorretta||"<i>&#8212;</i>")+\'</div>\';}else if(ct==="2"){c.innerHTML=\'<div id="editor" class="wrap sol-mode">\'+(f.dashboardAlunno||"")+\'</div>\';}else if(ct==="3"){c.innerHTML=\'<div id="editor" class="wrap sol-mode">\'+(f.dashboardCorretta||"")+\'</div>\';}else if(ct==="4"){c.innerHTML=VALHTML(d);}}'
       + 'for(var a=0;a<fb.length;a++){fb[a].onclick=function(){cf=+this.getAttribute("data-f");for(var x=0;x<fb.length;x++){fb[x].className="exp-fbtn";}this.className="exp-fbtn active";render();};}'
       + 'for(var b=0;b<tb.length;b++){tb[b].onclick=function(){ct=this.getAttribute("data-t");for(var y=0;y<tb.length;y++){tb[y].className="exp-tab";}this.className="exp-tab active";render();};}'
       + 'render();}'
@@ -2059,7 +2059,21 @@
         var nomeCompleto = al ? ((al.cognome||'') + ' ' + (al.nome||'')).trim() : (primo.nome || pin);
         var fatture = assigned.slice().sort(function(a,b){ return (parseInt(numeroFattura(a.id),10)||0)-(parseInt(numeroFattura(b.id),10)||0); }).map(function(x){
           var t = cons[x.id];
-          return { num:numeroFattura(x.id), titolo:t.titolo, nonSvolta:(t.nonSvolta||false), cortesiaAlunno:t.cortesiaAlunno, cortesiaCorretta:t.cortesiaCorretta, dashboardAlunno:t.dashboardAlunno, dashboardCorretta:t.dashboardCorretta };
+          var ns = (t.nonSvolta||false);
+          // Il file esportato e' autonomo e non puo' ricostruire nulla da solo: qui, dove ho l'archivio e
+          // l'editor, cuocio dentro tutto quello che serve.
+          // (1) Le CORRETTE devono esserci SEMPRE: se non erano state salvate (alunno mai entrato), le ricostruisco.
+          var cortCorr = t.cortesiaCorretta || '', dashCorr = t.dashboardCorretta || '';
+          if(!cortCorr || !dashCorr){ var rc = correttaDaArchivio(x.id); if(!cortCorr) cortCorr = rc.cort; if(!dashCorr) dashCorr = rc.dash; }
+          // (2) Mai entrato: al posto del vuoto, lo SCHELETRO vuoto (fattura e dashboard come all'inizio) + cartello.
+          var cortAl = t.cortesiaAlunno || '', dashAl = t.dashboardAlunno || '';
+          if(ns){
+            var bannerNS = '<div class="cx-nonsvolta">Fattura non svolta — l\'alunno non è mai entrato nella verifica.</div>';
+            var skelCort = buildCortesia({ t:{}, r:{totaleMerce:'',imponibile:'',iva:'',totFatt:''}, articoli:[], scontiGen:[], spese:{accessoria:[],anticipata:[],cauzione:[],interessi:[]} });
+            cortAl = bannerNS + skelCort;
+            dashAl = bannerNS + ((typeof PRISTINE_EDITOR !== 'undefined' && PRISTINE_EDITOR) ? PRISTINE_EDITOR : '');
+          }
+          return { num:numeroFattura(x.id), titolo:t.titolo, nonSvolta:ns, cortesiaAlunno:cortAl, cortesiaCorretta:cortCorr, dashboardAlunno:dashAl, dashboardCorretta:dashCorr };
         });
         var cvs = (CLOUD_STUD[pin] || {}).valutazione || null;
         data.push({ pin:pin, nome:nomeCompleto, cognome:cognome, nums:fatture.map(function(f){ return f.num; }).join(' · '), fatture:fatture, val:cvs, voto:(cvs ? cvs.voto_finale : ''), perc:(cvs && cvs.perc != null ? cvs.perc : null) });
