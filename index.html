@@ -2990,7 +2990,13 @@
       });
     });
     h += '</tbody></table></div><div class="cx-sumwrap"><div class="cx-sum">';
-    h += '<div class="cx-row"><span>Totale merce</span><span>' + moneyOr(r.totaleMerce) + '</span></div>';
+    // «Totale merce» compare SOLO se qualcosa la separa dall'imponibile: sconti generali o spese accessorie.
+    // Senza, merce == imponibile e la riga era un doppione inutile — o «€ 0,00» nella cortesia dell'alunno,
+    // che quel campo non lo digita nemmeno (in dashboard è nascosto). Stessa condizione della dashboard
+    // (row-totale mostrato solo se hasGen || hasAcc, vedi recomputeAll).
+    var merceHaGen = (D.scontiGen || []).some(function(s){ return s.motivo || s.perc || s.imp; });
+    var merceHaAcc = ((D.spese && D.spese.accessoria) || []).some(function(s){ return s.desc || s.imp; });
+    if(merceHaGen || merceHaAcc){ h += '<div class="cx-row"><span>Totale merce</span><span>' + moneyOr(r.totaleMerce) + '</span></div>'; }
     D.scontiGen.forEach(function(s){ if(s.motivo||s.perc||s.imp) h += '<div class="cx-row" style="color:var(--danger);"><span>Sconto ' + esc(s.motivo) + (s.perc?' '+esc(s.perc)+'%':'') + '</span><span>' + esc(s.imp||'—') + '</span></div>'; });
     D.spese.accessoria.forEach(function(s){ if(s.desc||s.imp) h += '<div class="cx-row"><span>' + esc(s.desc||'Spese accessorie') + ' (art. 12)</span><span>' + esc(s.imp||'—') + '</span></div>'; });
     h += '<div class="cx-row"><span>Imponibile</span><span>' + moneyOr(r.imponibile) + '</span></div><div class="cx-row cx-ivarow"><span>IVA</span><span>' + moneyOr(r.iva) + '</span></div>';
