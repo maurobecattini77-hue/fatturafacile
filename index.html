@@ -959,6 +959,29 @@
       }, function(){ if(cb) cb(false, 'nessuna risposta'); });
     }catch(e){ if(cb) cb(false, e.message); }
   }
+  // Conta le consegne di VERIFICA rimaste a una classe (i compiti a casa NON si contano: quelli sono
+  // l'archivio, e non c'entrano con la verifica nuova). cb(numero) — cb(-1) se il cloud non risponde:
+  // «non lo so» non è «zero», e su un forse non si cancella niente.
+  // NB: in questo progetto «allenamento» è il nome che l'app dà alle consegne di VERIFICA (r.1922):
+  // l'unica modalità davvero diversa è 'compiti'. Per questo si filtra per esclusione, come il Reset.
+  function cloudContaConsegneVerifica(classe, cb){
+    if(!SB || !classe){ cb && cb(-1); return; }
+    try{
+      SB.from('fatt_tentativi').select('pin').eq('classe', classe).neq('modalita', 'compiti').then(function(res){
+        if(!res || res.error || !res.data){ cb && cb(-1); return; }
+        cb && cb(res.data.length);
+      }, function(){ cb && cb(-1); });
+    }catch(e){ cb && cb(-1); }
+  }
+  function cloudCancellaConsegneVerifica(classe, cb){
+    if(!SB || !classe){ cb && cb(false, 'nessun collegamento al cloud'); return; }
+    try{
+      SB.from('fatt_tentativi').delete().eq('classe', classe).neq('modalita', 'compiti').select('pin').then(function(res){
+        if(!res || res.error){ cb && cb(false, (res && res.error && res.error.message) || 'il cloud non ha confermato'); return; }
+        cb && cb(true, null, (res.data || []).length);   // quante righe ha DAVVERO cancellato
+      }, function(){ cb && cb(false, 'il cloud non ha risposto'); });
+    }catch(e){ cb && cb(false, 'errore imprevisto'); }
+  }
   function cloudSetArchivio(j){
     if(!SB || !j) return;
     try{ SB.from('fatt_config').update({ archivio:j, updated_at:new Date().toISOString() }).eq('id', 1).then(function(){}, function(){}); }catch(e){}
@@ -5067,7 +5090,28 @@
     if(!j || !Array.isArray(j.alunni)){ showAlert('Formato classe non riconosciuto: manca l\'elenco "alunni".'); return; }
     cloudUpsertClasse(j, function(ok, err){
       if(ok){
-        showAlert('Classe "' + (j.classe||'—') + '" caricata: ' + j.alunni.length + ' alunni. Se hai più classi, passi dall\'una all\'altra con la tendina in alto.');
+        // «Carica classe» azzera stato e voti ma NON cancellava le consegne della verifica PRECEDENTE.
+        // Danno vero (provato il 17/07): ricarichi la classe, assegni la verifica nuova, e chi aveva gia'
+        // consegnato QUELLA fattura in passato risulta subito «Consegnato» senza aver fatto niente — con
+        // tanto di «Valuta», che aprirebbe il lavoro VECCHIO spacciandolo per il nuovo. Il Reset le cancella,
+        // ma niente obbliga a fare il Reset prima.
+        // Non le cancello di nascosto: cancellare e' irreversibile, quindi lo dico e decide il docente.
+        var cl = j.classe || '';
+        cloudContaConsegneVerifica(cl, function(n){
+          var base = 'Classe "' + (cl||'—') + '" caricata: ' + j.alunni.length + ' alunni. Se hai più classi, passi dall\'una all\'altra con la tendina in alto.';
+          if(n === 0){ showAlert(base); return; }
+          if(n < 0){ showAlert(base + '\n\n(Non sono riuscito a controllare se restano consegne della verifica precedente: il cloud non ha risposto. Se qualcuno risulta «Consegnato» senza aver fatto niente, è quello.)'); return; }
+          showConfirm(base + '\n\n⚠ Ci sono ancora ' + n + (n === 1 ? ' consegna' : ' consegne') + ' della verifica PRECEDENTE di ' + cl + '. Se le lascio, appena assegni la verifica nuova qualcuno risulterà subito «Consegnato» senza aver fatto niente, e valutandolo apriresti il lavoro vecchio.\n\nSe ti servono ancora, premi Annulla ed esporta prima («Esporta HTML» o «Backup»).\n\nOK = cancellale · Annulla = lasciale',
+            function(){
+              cloudCancellaConsegneVerifica(cl, function(ok2, err2, quante){
+                if(!ok2){ showAlert('NON sono riuscito a cancellare le consegne vecchie di ' + cl + ': ' + (err2 || 'il cloud non ha risposto') + '.\n\nSono ancora lì: se assegni la verifica ora, qualcuno risulterà già «Consegnato». Riprova quando il collegamento torna.'); return; }
+                CLOUD_CONS = {}; refreshCloudStud(function(){ refreshConsegne(renderDocente); });
+                showAlert('Consegne della verifica precedente cancellate: ' + quante + '. Ora la classe ' + cl + ' è davvero un foglio bianco.');
+              });
+            },
+            function(){ showAlert('Le ho lasciate. Attento: assegnando la verifica, chi aveva già consegnato quella fattura risulterà «Consegnato» senza aver fatto niente.'); }
+          );
+        });
       } else {
         showAlert('CLASSE NON CARICATA NEL CLOUD (' + (err || 'rete') + ').\n\nLa vedi qui sulla dashboard, ma i tuoi alunni NON riusciranno a entrare col PIN, perché per il sistema non esistono ancora.\n\nControlla la connessione e ripremi «Carica classe» PRIMA di far iniziare la verifica.');
       }
