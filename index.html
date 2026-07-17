@@ -1018,8 +1018,19 @@
       return nome + (x.liv != null ? ' [' + (LIV_NOMI[x.liv] || x.liv) + ']' : '');
     }).join('  ·  ');
   }
-  /* Numero della fattura senza prefisso: "ES04" → "4", "ES10" → "10". */
-  function numeroFattura(id){ var m = String(id || '').match(/(\d+)/); return m ? String(Number(m[1])) : String(id || ''); }
+  /* Numero dell'esercizio come lo vede l'alunno. Viene dal campo "numero" dell'archivio, NON dall'id:
+     l'id è la chiave con cui sono salvate le consegne (fatt_tentativi.fattura_id) e non si tocca mai,
+     così una fattura nuova si può infilare in mezzo cambiando solo i "numero".
+     Ripiego sulle cifre dell'id ("ES04" → "4") per gli archivi vecchi, che il campo non ce l'hanno,
+     e per gli id che non stanno più nell'archivio (consegne di esercizi rimossi). */
+  function numeroFattura(id){
+    if(typeof FATTURE !== 'undefined' && FATTURE && FATTURE.length){
+      for(var i = 0; i < FATTURE.length; i++){
+        if(FATTURE[i] && FATTURE[i].id === id && FATTURE[i].numero != null && FATTURE[i].numero !== '') return String(FATTURE[i].numero);
+      }
+    }
+    var m = String(id || '').match(/(\d+)/); return m ? String(Number(m[1])) : String(id || '');
+  }
   /* Forma breve per la colonna alunno: "10(G) · 4(A) · 3(A)" (nell'ordine dato). G/A/M = livello. */
   function descriviAssegnazioneBreve(list){
     if(!list || !list.length) return '—';
@@ -3323,7 +3334,20 @@
               d_numero:testo.documento.numero, d_data:testo.documento.data, p_metodo:testo.pagamento.metodo, p_termini:testo.pagamento.termini, p_iban:testo.pagamento.iban };
     var r = { totaleMerce:eur(ta.totaleMerce||0), imponibile:eur(ta.imponibile||0), iva:eur(ta.iva||0), totFatt:eur(ta.totaleFattura||0) };
     var castelletto = calcCastelletto(sol, ta);
-    return { id:fx.id, titolo:fx.titolo, difficolta:fx.difficolta, testo:testo, soluzione:{ t:t, r:r, articoli:solArt, scontiGen:scontiGen, spese:spese, castelletto:castelletto } };
+    return { id:fx.id, numero:numeroDaArchivio(fx), titolo:titoloDaArchivio(fx), difficolta:fx.difficolta, testo:testo, soluzione:{ t:t, r:r, articoli:solArt, scontiGen:scontiGen, spese:spese, castelletto:castelletto } };
+  }
+  /* Il numero scritto nell'archivio; se manca (archivi vecchi) si ripiega sulle cifre dell'id. */
+  function numeroDaArchivio(fx){
+    if(fx && fx.numero != null && String(fx.numero) !== '') return String(fx.numero);
+    var m = String((fx && fx.id) || '').match(/(\d+)/);
+    return m ? String(Number(m[1])) : String((fx && fx.id) || '');
+  }
+  /* Il titolo segue il numero da solo, così rinumerare NON vuol dire ricordarsi di riscrivere anche i titoli.
+     Un titolo personalizzato (che non sia il solito "Esercizio n. X") viene invece rispettato così com'è. */
+  function titoloDaArchivio(fx){
+    var num = numeroDaArchivio(fx), tit = (fx && fx.titolo) ? String(fx.titolo) : '';
+    if(!tit || /^\s*Esercizio\s+n\.?\s*\d+\s*$/i.test(tit)) return 'Esercizio n. ' + num;
+    return tit;
   }
   function adattaArchivio(j){ return (j.fatture||[]).map(adattaFattura); }
   function buildRubrica(){
