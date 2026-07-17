@@ -1355,8 +1355,9 @@
           // per chi non è ancora entrato, così al rientro passa dalla porta normale (r.1393: "nessuno collegato
           // → entra e diventa il proprietario") e l'anti-doppione riparte pulito da lì.
           // Il LAVORO non è nello stato: sta in bozza_corrente e in fatt_tentativi, e non lo tocco.
-          // NB: qui NON uso il meccanismo del «riammesso» apposta — è quello dello «Sblocca», ha un difetto
-          // aperto (può essere raccolto dal compagno furbo) e in prova non si è comportato come promette.
+          // È ESATTAMENTE quello che fa da sempre lo «Sblocca» del docente (r.1471: stato 'non_iniziato' +
+          // presenza azzerata), cioè il meccanismo che Mauro collauda in laboratorio da mesi. Qui vale per
+          // tutta la classe in un colpo solo, che è il senso del «Riprendi».
           // Chi ha consegnato resta consegnato; chi non è mai entrato non ha sessione da cancellare.
           try{
             SB.from('fatt_studenti').update({ stato:'non_iniziato', ultimo_accesso:null, riammesso:false }).eq('classe', classe).eq('consegnata', false).in('stato', ['in_corso','bloccato']).then(function(){ cb && cb(true, null); }, function(){ cb && cb(true, null); });
