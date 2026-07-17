@@ -343,6 +343,13 @@
   .st-on{ background:rgba(43,108,176,.14); color:#2b6cb0; }
   .st-done{ background:rgba(235,200,113,.32); color:#7a5c14; }
   .st-block{ background:rgba(180,71,47,.12); color:#b4472f; }
+  /* Segnato assente dal docente: rosso, e la riga si smorza. Deve saltare all'occhio senza leggere. */
+  .st-assente{ background:rgba(180,71,47,.12); color:#b4472f; }
+  tr.riga-assente{ opacity:.5; }
+  /* Il cognome è cliccabile (segna assente/presente): al passaggio del mouse GRASSETTO, mai sottolineato. */
+  td.nome-cell{ cursor:pointer; }
+  td.nome-cell:hover{ font-weight:700; }
+  tr:hover > td.nome-cell{ background:#f7f8fa; }
   .btn-mini{ border:1px solid var(--line2,#dbe4f2); background:#fff; color:#254a86; border-radius:8px; padding:6px 12px; font-family:inherit; font-size:13px; font-weight:700; cursor:pointer; }
   .btn-mini:hover{ background:#eef2f7; }
   .btn-sblocca{ border:none; background:#93c0a8; color:#1e402d; border-radius:8px; padding:4px 10px; font-family:inherit; font-size:12px; font-weight:700; cursor:pointer; }
@@ -357,6 +364,14 @@
   /* Consegna classe + Riammetti classe: colore lavanda (ex Archivio compiti), NON in grassetto */
   .btn-lavanda{ background:#C0B9EF; border:1px solid #9187db; color:var(--ink); border-radius:8px; padding:10px 16px; font-family:inherit; font-size:14px; font-weight:400; cursor:pointer; display:inline-flex; align-items:center; }
   .btn-lavanda:hover{ background:#b3abea; }
+  /* Sospendi / Riprendi verifica: colore suo (azzurro-ardesia), diverso da tutti gli altri. È l'interruttore
+     della lezione, non deve somigliare né alle consegne (lavanda) né al Reset (rosso). Da sospesa diventa
+     verde: un colpo d'occhio deve bastare a sapere se la verifica è aperta o chiusa. */
+  .btn-sospendi{ background:#cfe0f5; border:1px solid #7ea9dd; color:#173d63; border-radius:8px; padding:10px 16px; font-family:inherit; font-size:14px; font-weight:400; cursor:pointer; display:inline-flex; align-items:center; }
+  .btn-sospendi:hover{ background:#bfd5f0; }
+  .btn-sospendi.ripr{ background:#bfe3c6; border-color:#77b586; color:#14401f; }
+  .btn-sospendi.ripr:hover{ background:#aedab8; }
+  .badge-sospesa{ display:inline-block; margin-left:10px; background:#e8f0fb; border:1px solid #7ea9dd; color:#173d63; border-radius:999px; padding:3px 12px; font-size:13px; vertical-align:middle; }
   /* Archivio compiti — stile "ipotesi 5" (accento viola). Attivo solo quando #menu-fatture ha la classe .arch5 */
   #menu-fatture{ display:flex; justify-content:center; }
   #menu-fatture.arch5 .attesa-card{ background:#f6f5fc; }
@@ -564,6 +579,7 @@
     <button class="btn-red" id="btn-reset" style="margin-left:auto;">Reset classe</button>
   </div>
   <div class="toolbar-doc">
+    <button class="btn-sospendi" id="btn-sospendi"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:7px;"><path d="M6 5h4v14h-4z"/><path d="M14 5h4v14h-4z"/></svg><span id="btn-sospendi-txt">Sospendi</span></button>
     <button class="btn-lavanda" id="btn-consegna-classe"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:7px;"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4z"/></svg>Consegna classe</button>
     <button class="btn-lavanda" id="btn-riammetti-classe"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:7px;"><path d="M9 14l-4 -4l4 -4"/><path d="M5 10h11a4 4 0 0 1 0 8h-1"/></svg>Riammetti classe</button>
     <button class="btn-pubblica" id="btn-pubblica-voti"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:7px;"><path d="M3 11l18 -5v12l-18 -5v-2z"/><path d="M11.6 16.8a3 3 0 1 1 -5.8 -1.6"/></svg>Pubblica voti</button>
@@ -933,7 +949,9 @@
     if(!SB || !j || !Array.isArray(j.alunni)){ if(cb) cb(false, 'cloud non disponibile'); return; }
     // Ricaricare una classe = foglio bianco: azzero anche stato e valutazioni, così il vecchio
     // voto/verifica non resta appiccicato dopo un Reset. È l'atto con cui riparte una nuova verifica.
-    var rows = j.alunni.map(function(a){ return { pin:a.pin, nome:a.nome, cognome:a.cognome, classe:j.classe||'', ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false, valutazione:null, valutazione_snapshot:null }; });
+    // Azzero anche «assente»: l'appello è di OGGI. Se restasse appiccicato, l'assente della settimana scorsa
+    // resterebbe chiuso fuori dalla verifica nuova senza che il docente lo sappia — un danno muto, il peggiore.
+    var rows = j.alunni.map(function(a){ return { pin:a.pin, nome:a.nome, cognome:a.cognome, classe:j.classe||'', ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false, valutazione:null, valutazione_snapshot:null, assente:false }; });
     try{
       SB.from('fatt_studenti').upsert(rows, { onConflict:'pin' }).then(function(res){
         if(!res || res.error){ if(cb) cb(false, (res && res.error && res.error.message) || 'nessuna risposta'); return; }
@@ -1306,6 +1324,74 @@
     STATE.compitiClassi = arr;
     if(SB){ try{ SB.from('fatt_config').update({ compiti_classi: arr }).eq('id', 1).then(function(){}, function(){}); }catch(e){} }
   }
+  // SOSPENDI / RIPRENDI una CLASSE (lista in fatt_config.sospese_classi).
+  // Sospesa = la verifica è chiusa a chiave: l'assegnazione, il lavoro e i voti restano intatti, ma gli alunni
+  // vedono i COMPITI finché il docente non preme «Riprendi». È l'opposto di compiti_classi sotto due aspetti
+  // che è facile confondere: (a) la classe sospesa RESTA nella tendina e in dashboard (il docente la sta
+  // usando); (b) l'assegnazione NON viene toccata (il Reset invece la cancella, e cancella le consegne).
+  // Sospendendo azzero anche la presenza della classe: nessun fantasma «Collegato» in dashboard, e soprattutto
+  // al rientro nessun blocco anti-doppio-accesso (l'alunno deve poter rientrare senza chiedere lo «Sblocca»).
+  // cb(ok, err): NIENTE annunci di successo senza la conferma del cloud — .select() mi ridà la riga scritta.
+  function cloudSospendiClasse(classe, on, cb){
+    if(!classe){ cb && cb(false, 'nessuna classe'); return; }
+    if(!SB){ cb && cb(false, 'nessun collegamento al cloud'); return; }
+    var arr = (STATE.sospeseClassi || []).slice();
+    var i = arr.indexOf(classe);
+    if(on && i === -1) arr.push(classe);
+    if(!on && i !== -1) arr.splice(i, 1);
+    try{
+      SB.from('fatt_config').update({ sospese_classi: arr }).eq('id', 1).select('sospese_classi').then(function(res){
+        if(!res || res.error || !res.data || !res.data.length){ cb && cb(false, (res && res.error && res.error.message) || 'il cloud non ha confermato'); return; }
+        var scritte = res.data[0].sospese_classi;
+        var davvero = Array.isArray(scritte) ? (scritte.indexOf(classe) !== -1) : false;
+        if(davvero !== !!on){ cb && cb(false, 'il cloud ha risposto, ma la classe non risulta come previsto'); return; }
+        STATE.sospeseClassi = Array.isArray(scritte) ? scritte : arr;   // copia locale = quello che c'è DAVVERO nel cloud
+        if(!on){
+          // RIPRENDI. Qui c'è un dettaglio che sembra un cavillo e invece è tutta la lezione: chi stava
+          // lavorando è rimasto 'in_corso' e la sua presenza è scaduta durante la sospensione. Al rientro
+          // cloudCheckAccesso lo scambierebbe per un CAMBIO DI DISPOSITIVO (r.1387) e lo bloccherebbe:
+          // il docente si troverebbe a sbloccare venti alunni a mano, uno per uno, a lezione iniziata.
+          // Quindi cancello la SESSIONE di chi era dentro (non il suo lavoro!): stato e presenza tornano come
+          // per chi non è ancora entrato, così al rientro passa dalla porta normale (r.1393: "nessuno collegato
+          // → entra e diventa il proprietario") e l'anti-doppione riparte pulito da lì.
+          // Il LAVORO non è nello stato: sta in bozza_corrente e in fatt_tentativi, e non lo tocco.
+          // NB: qui NON uso il meccanismo del «riammesso» apposta — è quello dello «Sblocca», ha un difetto
+          // aperto (può essere raccolto dal compagno furbo) e in prova non si è comportato come promette.
+          // Chi ha consegnato resta consegnato; chi non è mai entrato non ha sessione da cancellare.
+          try{
+            SB.from('fatt_studenti').update({ stato:'non_iniziato', ultimo_accesso:null, riammesso:false }).eq('classe', classe).eq('consegnata', false).in('stato', ['in_corso','bloccato']).then(function(){ cb && cb(true, null); }, function(){ cb && cb(true, null); });
+          }catch(e){ cb && cb(true, null); }
+          return;
+        }
+        // Sospesa per davvero: ora spengo la presenza. Se questa seconda scrittura fallisce la sospensione
+        // vale lo stesso (è già nel cloud): resterebbe solo qualche «Collegato» fantasma, che il docente vede.
+        try{
+          SB.from('fatt_studenti').update({ ultimo_accesso:null }).eq('classe', classe).then(function(){ cb && cb(true, null); }, function(){ cb && cb(true, null); });
+        }catch(e){ cb && cb(true, null); }
+      }, function(e){ cb && cb(false, 'il cloud non ha risposto'); });
+    }catch(e){ cb && cb(false, 'errore imprevisto'); }
+  }
+  function classeSospesa(classe){ return !!(classe && (STATE.sospeseClassi || []).indexOf(classe) !== -1); }
+  // Segna un alunno ASSENTE (o lo rimette presente). L'assente non apre la verifica: se entra col suo PIN vede
+  // i COMPITI, senza nessun messaggio — così da casa non scopre nemmeno che c'è una verifica in corso.
+  // Serve perché guardare chi è collegato non basta: uno entra, sbircia le fatture, fotografa e chiude.
+  // cb(ok, err): come per la sospensione, nessun annuncio senza la conferma del cloud.
+  function cloudSetAssente(pin, on, cb){
+    if(!SB){ cb && cb(false, 'nessun collegamento al cloud'); return; }
+    try{
+      SB.from('fatt_studenti').update({ assente: !!on }).eq('pin', pin).select('pin,assente').then(function(res){
+        if(!res || res.error || !res.data || !res.data.length){ cb && cb(false, (res && res.error && res.error.message) || 'il cloud non ha confermato'); return; }
+        if(!!res.data[0].assente !== !!on){ cb && cb(false, 'il cloud ha risposto, ma l\'alunno non risulta come previsto'); return; }
+        if(CLOUD_STUD[pin]) CLOUD_STUD[pin].assente = !!on;
+        if(!on){ cb && cb(true, null); return; }
+        // Assente: spengo anche la sua presenza. Se stava dentro, il suo guardiano lo porta ai compiti da solo
+        // (out.chiusa) e senza presenza non resta un fantasma «Collegato» in dashboard.
+        try{
+          SB.from('fatt_studenti').update({ ultimo_accesso:null }).eq('pin', pin).then(function(){ cb && cb(true, null); }, function(){ cb && cb(true, null); });
+        }catch(e){ cb && cb(true, null); }
+      }, function(){ cb && cb(false, 'il cloud non ha risposto'); });
+    }catch(e){ cb && cb(false, 'errore imprevisto'); }
+  }
   // Blocco anti-doppio-accesso: controlla se l'alunno può entrare e aggiorna lo stato.
   function cloudCheckAccesso(pin, cb){
     if(!SB){ cb && cb({ allow:true }); return; }
@@ -1391,7 +1477,11 @@
   // Il docente ha AZZERATO la verifica (Reset classe, o ha ricaricato la classe). Il dispositivo dell'alunno
   // deve CHIUDERSI DA SOLO: ferma tutti i sorveglianti, ferma il battito di presenza e CANCELLA la propria
   // presenza dal cloud. Così la dashboard del docente resta pulita: niente alunni "Collegato" fantasma.
-  function terminaSessionePerReset(){
+  // Chiude la sessione di VERIFICA dell'alunno e lo porta dove ha senso (compiti, o gate se sta per arrivare
+  // una verifica nuova). La chiamano tre situazioni diverse: il docente ha RESETTATO, ha SOSPESO la verifica,
+  // o ha segnato QUESTO alunno assente. In tutti e tre i casi il lavoro resta salvo nel cloud: qui si spengono
+  // solo i timer e la presenza (così al rientro non scatta il blocco anti-doppio-accesso).
+  function terminaSessioneVerifica(){
     if(STATE.sessioneChiusa) return;      // una volta sola
     STATE.sessioneChiusa = true;
     var pin = STATE.studente ? STATE.studente.pin : '';
@@ -1448,7 +1538,7 @@
         if(sessioneSorpassata(s.sessione)){ terminaSessionePerAltroDispositivo(); return; }
         var st = s.stato || 'non_iniziato';
         if(!STATE.sessArmed){ if(st !== 'non_iniziato') STATE.sessArmed = true; return; }
-        if(st === 'non_iniziato' && !s.fattura_assegnata) terminaSessionePerReset();
+        if(st === 'non_iniziato' && !s.fattura_assegnata) terminaSessioneVerifica();
       }, function(){});
     }, 4000);
   }
@@ -1472,6 +1562,11 @@
         //     l'alunno veniva sbattuto fuori dalla verifica e riversato nei compiti a casa, la sua presenza
         //     cancellata, e la «Consegna classe» lo saltava perché ormai risultava «Non collegato».
         if(!ctx || ctx.errore){ STATE.resetConferme = 0; return; }
+        // (0-bis) Il docente ha SOSPESO la verifica (o ha segnato assente proprio lui): la verifica si chiude
+        //     qui, adesso. Il lavoro resta salvo nel cloud e l'alunno atterra sui compiti, dove può allenarsi
+        //     quanto vuole finché il docente non preme «Riprendi». Nessuna consegna, nessuna forzatura.
+        //     Sta sopra a tutto il resto perché una verifica chiusa non deve nemmeno essere guardata.
+        if(ctx.chiusa){ terminaSessioneVerifica(); return; }
         // (1) Il docente ha RIAMMESSO l'alunno mentre è in sessione (anche fermo sul menù "tutte consegnate"):
         //     tutte le fatture tornano DA CONSEGNARE, col suo lavoro salvato dentro.
         if(ctx && ctx.riammesso && STATE.consegnata && !STATE.riammConsumando){ applicaRiammissioneInSessione(); return; }
@@ -1489,7 +1584,7 @@
         if(!nuova.length){
           if((STATE.mieAssegnate || []).length){
             STATE.resetConferme = (STATE.resetConferme || 0) + 1;
-            if(STATE.resetConferme >= 2) terminaSessionePerReset();
+            if(STATE.resetConferme >= 2) terminaSessioneVerifica();
           }
           return;
         }
@@ -2109,7 +2204,7 @@
   function refreshCloudStud(cb){
     if(!SB){ cb && cb(); return; }
     try{
-      SB.from('fatt_studenti').select('pin,nome,cognome,classe,ultimo_accesso,fattura_corrente,livello_corrente,fattura_assegnata,livello_assegnato,consegnata,stato,riammesso,valutazione').then(function(res){
+      SB.from('fatt_studenti').select('pin,nome,cognome,classe,ultimo_accesso,fattura_corrente,livello_corrente,fattura_assegnata,livello_assegnato,consegnata,stato,riammesso,valutazione,assente').then(function(res){
         // UN BUCO DI RETE NON DEVE CANCELLARE LA DASHBOARD. Prima CLOUD_STUD veniva azzerato PRIMA di
         // guardare l'esito: con la rete giu' restava vuoto, renderDocente non trovava piu' nessuna classe,
         // scriveva «Nessuna classe caricata» e cancellava pure ff_classe dal browser. Ogni 4 secondi.
@@ -2144,39 +2239,60 @@
     // out.errore = "NON LO SO" (la rete non ha risposto). È diverso da "nessuna assegnazione": chi legge
     // deve poter distinguere il silenzio del cloud da una risposta vera, altrimenti un buco di wifi viene
     // scambiato per «il docente ha resettato la classe» e l'alunno viene buttato fuori dalla verifica.
-    var out = { fattura:null, livello:null, lista:[], stato:null, consegnata:false, riammesso:false, errore:false };
+    // out.chiusa = il docente ha SOSPESO la verifica della sua classe, o ha segnato lui assente. Serve a chi
+    // sta già lavorando: la sua sessione va chiusa e l'alunno portato ai compiti, col lavoro salvo.
+    // Resta "non lo so" (false) se il cloud non risponde: una sospensione falsa butterebbe fuori tutta la
+    // classe in mezzo al compito, esattamente il danno che i paracadute qui sotto servono a evitare.
+    var out = { fattura:null, livello:null, lista:[], stato:null, consegnata:false, riammesso:false, chiusa:false, errore:false };
     try{
-      SB.from('fatt_studenti').select('fattura_assegnata,livello_assegnato,stato,consegnata,riammesso').eq('pin', pin).maybeSingle().then(function(r1){
+      SB.from('fatt_studenti').select('fattura_assegnata,livello_assegnato,stato,consegnata,riammesso,classe,assente').eq('pin', pin).maybeSingle().then(function(r1){
         // ATTENZIONE: supabase-js NON rifiuta la promessa quando la rete cade: RISOLVE con { data:null, error:... }.
         // Senza questo controllo, un errore di rete arrivava qui travestito da "riga vuota" = nessuna assegnazione.
         if(!r1 || r1.error){ out.errore = true; cb && cb(out); return; }
         var per = r1.data ? r1.data : null;
         if(per){ out.stato = per.stato || null; out.consegnata = !!per.consegnata; out.riammesso = !!per.riammesso; }
-        if(per && per.fattura_assegnata){ out.fattura = assegnPrimoId(per.fattura_assegnata); out.livello = assegnPrimoLiv(per.fattura_assegnata) || per.livello_assegnato || null; out.lista = parseAssegnazione(per.fattura_assegnata); cb && cb(out); return; }
+        if(per && per.fattura_assegnata){ out.fattura = assegnPrimoId(per.fattura_assegnata); out.livello = assegnPrimoLiv(per.fattura_assegnata) || per.livello_assegnato || null; out.lista = parseAssegnazione(per.fattura_assegnata); }
         // MULTI-CLASSE: l'assegnazione è SOLO per-studente. Niente più fallback globale (sarebbe condiviso fra le classi).
-        cb && cb(out);
+        if(per && per.assente){ out.chiusa = true; cb && cb(out); return; }
+        var cl = per ? per.classe : null;
+        if(!cl){ cb && cb(out); return; }
+        SB.from('fatt_config').select('sospese_classi').eq('id', 1).maybeSingle().then(function(r2){
+          if(r2 && !r2.error && r2.data && Array.isArray(r2.data.sospese_classi)){ out.chiusa = r2.data.sospese_classi.indexOf(cl) !== -1; }
+          cb && cb(out);
+        }, function(){ cb && cb(out); });
       }, function(){ out.errore = true; cb && cb(out); });
     }catch(e){ out.errore = true; cb && cb(out); }
   }
-  // Decide la MODALITÀ dell'alunno all'accesso. Ritorna 'compiti' SOLO se: nessuna assegnazione (né sua né di
-  // classe) E il docente NON è presente (battito vecchio > 60s). Altrimenti null = flusso normale
+  // Decide la MODALITÀ dell'alunno all'accesso. 'compiti' se: la classe è SOSPESA, oppure è in modalità
+  // compiti, oppure non ha assegnazione E il docente non è presente. Altrimenti null = flusso normale
   // (assegnato → fa la verifica; nessuna assegnazione ma docente presente → schermata "In attesa").
+  //
+  // L'ORDINE DEI CONTROLLI È IL CUORE DI QUESTA FUNZIONE, non toccarlo alla leggera.
+  // Prima l'assegnazione personale usciva PER PRIMA, e questo apriva due buchi grossi (trovati da Mauro
+  // il 17/07 provando l'app, non leggendo il codice):
+  //   1. l'alunno con un'assegnazione non poteva MAI allenarsi: per l'app era "in verifica" per sempre;
+  //   2. l'ASSENTE faceva la verifica da casa — «Assegna a tutta la classe» assegna anche a chi non c'è,
+  //      quindi gli bastava il PIN, a qualsiasi ora, docente collegato o no.
+  // Ora la SOSPENSIONE decisa dal docente viene prima di tutto: è lui a dire quando la verifica è aperta.
   function cloudModalitaAlunno(pin, cb){
     if(!SB){ cb && cb(null); return; }
     try{
-      SB.from('fatt_studenti').select('fattura_assegnata,classe').eq('pin', pin).maybeSingle().then(function(r1){
+      SB.from('fatt_studenti').select('fattura_assegnata,classe,assente').eq('pin', pin).maybeSingle().then(function(r1){
         // Rete caduta (supabase RISOLVE con {data:null,error}): NON so nulla → flusso normale, MAI 'compiti'.
         // Prima, con la rete giù, cfg restava null → hb=Infinity → "docente assente" → l'alunno finiva nei
         // compiti a casa NEL MEZZO DI UNA VERIFICA.
         if(!r1 || r1.error){ cb && cb(null); return; }
         var per = r1.data ? r1.data : null;
-        if(per && per.fattura_assegnata){ cb && cb(null); return; } // ha un'assegnazione personale → normale (verifica)
         var cl = per ? per.classe : null;
-        SB.from('fatt_config').select('docente_heartbeat,compiti_classi').eq('id', 1).maybeSingle().then(function(r2){
+        SB.from('fatt_config').select('docente_heartbeat,compiti_classi,sospese_classi').eq('id', 1).maybeSingle().then(function(r2){
           if(!r2 || r2.error){ cb && cb(null); return; } // idem: senza risposta non posso dedurre l'assenza del docente
           var cfg = r2.data ? r2.data : null;
+          var sospese = (cfg && Array.isArray(cfg.sospese_classi)) ? cfg.sospese_classi : [];
+          if(cl && sospese.indexOf(cl) !== -1){ cb && cb('compiti'); return; } // VERIFICA SOSPESA dal docente → compiti (l'assegnazione resta, ma è chiusa a chiave)
           var compitiClassi = (cfg && Array.isArray(cfg.compiti_classi)) ? cfg.compiti_classi : [];
           if(cl && compitiClassi.indexOf(cl) !== -1){ cb && cb('compiti'); return; } // classe messa in modalità compiti dal Reset → compiti SEMPRE
+          if(per && per.assente){ cb && cb('compiti'); return; } // segnato ASSENTE dal docente → vede i compiti, senza nessun messaggio strano
+          if(per && per.fattura_assegnata){ cb && cb(null); return; } // ha un'assegnazione personale → normale (verifica)
           var hb = (cfg && cfg.docente_heartbeat) ? (Date.now() - new Date(cfg.docente_heartbeat).getTime()) : Infinity;
           cb && cb((hb < 60000) ? null : 'compiti'); // altrimenti: docente presente → "In attesa"; assente → compiti
         }, function(){ cb && cb(null); });
@@ -2227,9 +2343,10 @@
     // sincronizza l'assegnazione di classe dal cloud (la dashboard riflette ciò che hanno davvero gli alunni)
     if(SB){
       try{
-        SB.from('fatt_config').select('assegnata_id,livello,compiti_classi').eq('id', 1).maybeSingle().then(function(res){
+        SB.from('fatt_config').select('assegnata_id,livello,compiti_classi,sospese_classi').eq('id', 1).maybeSingle().then(function(res){
           var cfg = (res && res.data) ? res.data : null;
           STATE.compitiClassi = (cfg && Array.isArray(cfg.compiti_classi)) ? cfg.compiti_classi : (STATE.compitiClassi || []);
+          STATE.sospeseClassi = (cfg && Array.isArray(cfg.sospese_classi)) ? cfg.sospese_classi : (STATE.sospeseClassi || []);
           if(cfg){ STATE.assegnate = parseAssegnazione(cfg.assegnata_id); STATE.assegnataId = assegnPrimoId(cfg.assegnata_id); var l0 = assegnPrimoLiv(cfg.assegnata_id) || cfg.livello; if(l0){ try{ localStorage.setItem('ff_livello', l0); }catch(e){} } }
           doRender();
         }, doRender);
@@ -3239,6 +3356,10 @@
     if(allDone && stato === 'bloccato') return { cls:'st-done', txt:'Consegnato', done:true, on:false, corso:false, block:true };
     if(allDone) return { cls:'st-done', txt:'Consegnato', done:true, on:false, corso:false, block:false };
     if(stato === 'bloccato') return { cls:'st-block', txt:'Bloccato', done:false, on:false, corso:false, block:true };
+    // Segnato ASSENTE dal docente: lo dico al posto di «Non collegato», che qui sarebbe un'informazione inutile
+    // (certo che non è collegato: non c'è). Sta DOPO «Consegnato»: chi ha consegnato resta consegnato, anche se
+    // poi lo segni assente per sbaglio. Non conta fra i «Collegati» (on:false).
+    if(s.assente) return { cls:'st-assente', txt:'Assente', done:false, on:false, corso:false, block:false, assente:true };
     var recent = s.ultimo_accesso && (Date.now() - new Date(s.ultimo_accesso).getTime() < 30000); // "Non collegato" dopo ~30s dall'ultimo battito (prima 120s); si auto-corregge: se lavora, torna subito collegato
     // Consegna PARZIALE (più fatture, alcune consegnate ma non tutte): mostra quali, in ordine numerico.
     if(multiplo && deliv.length > 0){
@@ -3322,6 +3443,42 @@
     var c = CLASSES.find(function(x){ return x.classe === nome; });
     if(c){ CLASSE = c; STATE.classeAttiva = nome; try{ localStorage.setItem('ff_classe', JSON.stringify(c)); }catch(e){} renderDocente(); }
   }
+  // Conferma dell'appello. Il messaggio NOMINA l'alunno: un clic distratto sulla riga sbagliata deve essere
+  // fermato qui, non scoperto a verifica finita. Se sta lavorando adesso glielo dico, e decide lui.
+  function chiediAssente(a, eraAssente){
+    var nome = ((a.cognome || '') + ' ' + (a.nome || '')).trim();
+    var st = statoAlunno(a.pin);
+    var msg;
+    if(eraAssente){
+      msg = 'Segnare ' + nome + ' come presente?\n\nTornerà a poter aprire la verifica come tutti gli altri.';
+    } else {
+      msg = 'Segnare ' + nome + ' come assente?\n\nNon potrà aprire la verifica: se entra col suo PIN vedrà i compiti, come un giorno qualsiasi. Puoi cambiare idea quando vuoi.';
+      if(st.corso || st.on){ msg = 'Attenzione: ' + nome + ' sta lavorando ADESSO.\n\n' + msg + '\n\nIl lavoro che ha fatto finora resta salvo: lo ritrova se lo rimetti presente.'; }
+    }
+    showConfirm(msg, function(){
+      cloudSetAssente(a.pin, !eraAssente, function(ok, err){
+        if(!ok){
+          showAlert('Non sono riuscito a segnare ' + nome + ': ' + (err || 'il cloud non ha risposto') + '.\n\nNon è cambiato niente. Controlla il collegamento e riprova.');
+          return;
+        }
+        refreshCloudStud(function(){ refreshConsegne(renderDocente); });
+      });
+    });
+  }
+  // Il pulsante dice sempre cosa succede al prossimo clic: «Sospendi» se la verifica è aperta, «Riprendi» se
+  // è chiusa. Senza classe caricata non ha niente da sospendere e sparisce.
+  function renderSospendi(){
+    var b = byId('btn-sospendi'), t = byId('btn-sospendi-txt'); if(!b || !t) return;
+    var cl = (CLASSE && CLASSE.classe) ? CLASSE.classe : null;
+    if(!cl){ b.style.display = 'none'; return; }
+    b.style.display = '';
+    var sosp = classeSospesa(cl);
+    t.textContent = sosp ? 'Riprendi' : 'Sospendi';
+    b.classList.toggle('ripr', sosp);
+    b.title = sosp
+      ? ('Riapri la verifica di ' + cl + ': gli alunni potranno rientrare dove l\'avevano lasciata.')
+      : ('Chiudi la verifica di ' + cl + ': gli alunni passano ai compiti, il lavoro resta salvo.');
+  }
   function renderSelClasse(){
     var sel = byId('sel-classe'); if(!sel) return;
     if(CLASSES.length < 2){ sel.style.display = 'none'; sel.innerHTML = ''; return; }
@@ -3357,7 +3514,10 @@
       STATE.assegnate = parseAssegnazione(anyAss); STATE.assegnataId = assegnPrimoId(anyAss);
     }
     var hasClasse = !!(CLASSE && CLASSE.alunni && CLASSE.alunni.length);
-    byId('doc-classe').textContent = hasClasse ? ('Classe ' + CLASSE.classe + ' · ' + CLASSE.alunni.length + ' alunni') : 'Nessuna classe caricata';
+    byId('doc-classe').innerHTML = hasClasse
+      ? (esc('Classe ' + CLASSE.classe + ' · ' + CLASSE.alunni.length + ' alunni') + (classeSospesa(CLASSE.classe) ? '<span class="badge-sospesa">Verifica sospesa</span>' : ''))
+      : 'Nessuna classe caricata';
+    renderSospendi();
     // (riepilogo di classe e livello predefinito rimossi: l'assegnazione si vede nelle righe alunno)
     // (il pulsante "Assegna" è stato rimosso: si assegna scegliendo dalla tendina)
     var nColl = 0, nCorso = 0, nDone = 0;
@@ -3371,8 +3531,14 @@
     alunniOrd.forEach(function(a, i){
       var st = statoAlunno(a.pin), cs = CLOUD_STUD[a.pin] || {};
       var tr = document.createElement('tr'); tr.setAttribute('data-pin', a.pin);
+      if(st.assente) tr.classList.add('riga-assente');
       var tdN = document.createElement('td'); tdN.textContent = (i+1);
       var tdNome = document.createElement('td'); tdNome.textContent = a.cognome + ' ' + a.nome;
+      // APPELLO: il cognome è l'interruttore assente/presente. Sta qui e non in una colonna nuova perché il
+      // registro ha già otto colonne, e all'appello serve un bersaglio grande da centrare in fretta.
+      tdNome.className = 'nome-cell';
+      tdNome.title = st.assente ? 'Clicca per rimetterlo presente' : 'Clicca per segnarlo assente';
+      tdNome.addEventListener('click', function(){ chiediAssente(a, st.assente); });
       var tdPin = document.createElement('td'); tdPin.className = 'pin-cell'; tdPin.textContent = a.pin;
       var tdSt = document.createElement('td'); tdSt.className = 'st-cell'; tdSt.innerHTML = '<span class="st-badge ' + st.cls + '">' + esc(st.txt) + '</span>';
       var tdAss = document.createElement('td'); tdAss.className = 'ass-cell';
@@ -4681,6 +4847,30 @@
     renderDocente(); show('docente'); startCollegatiTimer();
   });
 
+  byId('btn-sospendi').addEventListener('click', function(){
+    if(!(CLASSE && CLASSE.classe)){ showAlert('Carica o seleziona prima una classe.'); return; }
+    var cl = CLASSE.classe;
+    var sosp = classeSospesa(cl);
+    var msg = sosp
+      ? ('Riprendere la verifica di ' + cl + '?\n\nGli alunni potranno rientrare e ritrovano il lavoro dov\'era, senza chiedere lo «Sblocca». Digli di collegarsi.')
+      : ('Sospendere la verifica di ' + cl + '?\n\nNessuno consegna e tu non forzi niente: il lavoro resta fermo e salvo com\'è adesso.\n\nDa questo momento gli alunni non vedono più la verifica: vedono i COMPITI, e possono allenarsi quanto vogliono, anche da casa. Quando vuoi riprendere, premi «Riprendi».');
+    showConfirm(msg, function(){
+      var b = byId('btn-sospendi'); if(b) b.disabled = true;
+      cloudSospendiClasse(cl, !sosp, function(ok, err){
+        if(b) b.disabled = false;
+        if(!ok){
+          // Niente annunci a vuoto: se il cloud non ha confermato, per gli alunni NON è cambiato nulla.
+          showAlert('Non sono riuscito a ' + (sosp ? 'riprendere' : 'sospendere') + ' la verifica di ' + cl + ': ' + (err || 'il cloud non ha risposto') + '.\n\nPer gli alunni non è cambiato niente. Controlla il collegamento e riprova.');
+          renderSospendi(); return;
+        }
+        refreshCloudStud(function(){ refreshConsegne(renderDocente); });
+        showAlert(sosp
+          ? ('Verifica di ' + cl + ' riaperta. Gli alunni possono rientrare: ritrovano il lavoro dov\'era.')
+          : ('Verifica di ' + cl + ' sospesa. Gli alunni ora vedono i compiti; il loro lavoro è fermo e salvo. Premi «Riprendi» quando volete ricominciare.'));
+      });
+    });
+  });
+
   byId('btn-scegli-fatture').addEventListener('click', function(){
     if(!FATTURE.length){ showAlert('Carica prima le esercitazioni con «Carica esercitazioni».'); return; }
     if(!(CLASSE && CLASSE.alunni && CLASSE.alunni.length)){ showAlert('Carica o seleziona prima una classe.'); return; }
@@ -4701,7 +4891,37 @@
       }
     });
   });
-  byId('btn-esci-top').addEventListener('click', goGate); // «Esci» docente ora è nella banda azzurra in alto
+  // «Esci» del docente: rete di salvataggio. Se esce con una verifica ancora APERTA, glielo ricordo — suona la
+  // campana, si chiude il portatile e ci si dimentica. Uscire NON sospende (è voluto: staccarsi non deve toccare
+  // i ragazzi), quindi se dice no esce e basta e la verifica resta aperta.
+  byId('btn-esci-top').addEventListener('click', function(){
+    var cl = (CLASSE && CLASSE.classe) ? CLASSE.classe : null;
+    var verificaAperta = !!(cl && !classeSospesa(cl) && (CLASSE.alunni || []).some(function(a){ var cs = CLOUD_STUD[a.pin]; return cs && cs.fattura_assegnata; }));
+    if(!verificaAperta){ goGate(); return; }
+    showConfirm('La verifica di ' + cl + ' è ancora APERTA.\n\nSe esci così, gli alunni col PIN possono continuare (anche da casa, stasera). Vuoi sospenderla prima di uscire?\n\nOK = sospendi ed esci · Annulla = esci lasciandola aperta',
+      function(){
+        cloudSospendiClasse(cl, true, function(ok, err){
+          if(!ok){ showAlert('Non sono riuscito a sospendere la verifica di ' + cl + ': ' + (err || 'il cloud non ha risposto') + '.\n\nLa verifica è rimasta APERTA. Non esco: riprova quando il collegamento torna.'); return; }
+          showAlert('Verifica di ' + cl + ' sospesa. Ora puoi chiudere tranquillo.');
+          goGate();
+        });
+      },
+      function(){ goGate(); }   // Annulla = esci e lasciala aperta (è una scelta legittima: la lezione continua dopo)
+    );
+  });
+  // La X del browser. Qui NON posso scrivere un avviso mio: i browser mostrano solo il loro messaggio grigio
+  // («Vuoi davvero lasciare la pagina?») e non accettano né testo né pulsanti nostri. È poco, ma è l'unico
+  // modo di far fermare un attimo chi sta chiudendo con una verifica aperta. Solo in dashboard, solo se aperta.
+  window.addEventListener('beforeunload', function(e){
+    try{
+      if(byId('docente').style.display === 'none') return;
+      var cl = (CLASSE && CLASSE.classe) ? CLASSE.classe : null;
+      if(!cl || classeSospesa(cl)) return;
+      var aperta = (CLASSE.alunni || []).some(function(a){ var cs = CLOUD_STUD[a.pin]; return cs && cs.fattura_assegnata; });
+      if(!aperta) return;
+      e.preventDefault(); e.returnValue = '';
+    }catch(err){}
+  });
   byId('btn-esci-attesa').addEventListener('click', goGate);
   byId('btn-esci-blocco').addEventListener('click', goGate);
   byId('btn-esci-menu').addEventListener('click', function(){ if(STATE.menuBackFn){ var fn = STATE.menuBackFn; fn(); return; } goGate(); });
