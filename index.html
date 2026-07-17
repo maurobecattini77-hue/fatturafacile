@@ -3112,7 +3112,9 @@
     function fill(rec){
       if(cod) cod.value = rec.cod || '';
       ta.value = rec.desc || ''; autogrow(ta);
-      var iva = box.querySelector('.iva'); if(iva) iva.value = ivaCodeFromLabel(rec.iva) || '';
+      // L'IVA la mette il sistema SOLO in Automatica (livello 3). In Guidata e Manuale la deve scegliere
+      // l'alunno: e' parte del ragionamento (soprattutto le esportazioni, dove non c'e' IVA e va messo N3).
+      var iva = box.querySelector('.iva'); if(iva && LIVELLO === 3) iva.value = ivaCodeFromLabel(rec.iva) || '';
       dd.classList.remove('open'); dd.innerHTML = '';
       recomputeAll(); if(LIVELLO === 3) autocalc();
     }
@@ -3123,7 +3125,7 @@
       if(!q || !q.trim() || list.length === 0){ dd.classList.remove('open'); return; }
       list.forEach(function(r){
         var it = document.createElement('div'); it.className = 'ana-dd-item';
-        it.innerHTML = '<b>' + esc(r.desc) + '</b><span class="sub">cod. ' + esc(r.cod) + ' · IVA ' + esc(r.iva) + '</span>';
+        it.innerHTML = '<b>' + esc(r.desc) + '</b><span class="sub">cod. ' + esc(r.cod) + (LIVELLO === 3 ? ' · IVA ' + esc(r.iva) : '') + '</span>';
         it.addEventListener('mousedown', function(e){ e.preventDefault(); fill(r); });
         dd.appendChild(it);
       });
