@@ -4546,9 +4546,15 @@
       var exp = document.createElement('button'); exp.innerHTML = icoDl + 'Esporta archivio' + etichetta;
       exp.style.cssText = 'display:inline-flex; align-items:center; background:#eef3fb; border:1px solid #cddcf0; color:#254a86; border-radius:9px; padding:10px 18px; font-size:14px; line-height:16px; cursor:pointer;';
       exp.addEventListener('click', function(){ esportaCompitiHTML(cl); });
-      // «Svuota» RIMOSSO di proposito: l'archivio compiti non si cancella più. Cresce e basta (al massimo tutti fanno
-      // tutto). Chi vuole riprovare usa «Allenati» dalla maschera alunno: allenamento locale, senza inviare al prof.
-      azioni.appendChild(exp); list.appendChild(azioni);
+      // «Elimina archivio»: rimesso il 17/07. Un archivio compiti vive quanto la classe: a fine anno (o per una
+      // classe di prova) e' peso morto, e senza questo pulsante non si poteva togliere in nessun modo.
+      // Sta QUI dentro, nella cartella della classe, accanto all'Esporta: si cancella solo cio' che stai guardando.
+      var nCompiti = 0; pins.forEach(function(p){ nCompiti += Object.keys(byPin[p].items).length; });
+      var del = document.createElement('button'); del.innerHTML = icoTr + 'Elimina archivio' + etichetta;
+      del.style.cssText = 'display:inline-flex; align-items:center; background:#fff; border:1px solid #f0b4b4; color:#c0392b; border-radius:9px; padding:10px 18px; font-size:14px; line-height:16px; cursor:pointer;';
+      del.title = 'Cancella definitivamente i compiti di questa classe. Le altre classi, le verifiche e i voti non si toccano.';
+      del.addEventListener('click', function(){ svuotaArchivioCompiti(cl, nCompiti); });
+      azioni.appendChild(exp); azioni.appendChild(del); list.appendChild(azioni);
     }
     var esci = byId('btn-esci-menu'); if(esci) esci.textContent = multiClasse ? '← Torna alle classi' : '← Torna alla dashboard';
     show('menu-fatture');
@@ -4605,21 +4611,42 @@
   // il filtro diventava `created_at >= 2000` e quindi cancellava i compiti di TUTTE LE CLASSI, con un
   // messaggio di conferma che non nominava nessuna classe. Era il bug più distruttivo dell'app.
   // Ora ogni cartella cancella SOLO il proprio contenuto, e la conferma dice esattamente cosa sparisce.
-  function svuotaArchivioCompiti(classe){
+  // ELIMINA ARCHIVIO di UNA classe. Un archivio compiti e' legato a una classe e a un anno: finito l'anno
+  // quei ragazzi vanno in quarta e quei compiti sono peso morto (e una classe di prova va tolta del tutto).
+  // Cancella SOLO la cartella su cui sei: le altre classi, le verifiche e i voti non si toccano.
+  // Il pulsante era stato tolto a luglio; rimesso il 17/07 su richiesta di Mauro, ma ORA con due differenze:
+  // (1) dice quanti compiti sta per cancellare e invita a esportarli prima; (2) NON dichiara «svuotato» se
+  // il cloud non ha confermato - prima .then(fatto, errore) annunciava il successo anche a fronte di un
+  // errore risolto (che e' come supabase segnala i guasti di rete), lasciando credere a una cancellazione
+  // mai avvenuta.
+  function svuotaArchivioCompiti(classe, quanti){
     if(!SB) return;
     var senzaClasse = (!classe || classe === '—');
-    var scope = senzaClasse ? ' della cartella «Senza classe»' : (' della classe ' + classe);
-    showConfirm('Vuoi svuotare l\'archivio dei compiti a casa' + scope + '? I compiti consegnati verranno cancellati DEFINITIVAMENTE. Le altre classi NON vengono toccate. (Non tocca le verifiche.)', function(){
-      var fatto = function(){ showAlert('Archivio compiti svuotato' + scope + '.'); apriArchivioCompiti(); };
-      var errore = function(){ showAlert('Errore durante lo svuotamento: non è stato cancellato nulla.'); };
+    var scope = senzaClasse ? 'della cartella «Senza classe»' : ('della classe ' + classe);
+    var quantiTxt = quanti ? (quanti === 1 ? '1 compito verrà cancellato' : (quanti + ' compiti verranno cancellati')) : 'I compiti consegnati verranno cancellati';
+    showConfirm('Eliminare DEFINITIVAMENTE l\'archivio compiti ' + scope + '?\n\n' + quantiTxt + ' dal cloud, e non si potranno più recuperare.\n\n🛟 Se ti servono, premi PRIMA «Esporta archivio» e salva il file: questa cancellazione non si può annullare.\n\nLe altre classi, le verifiche e i voti NON vengono toccati.', function(){
+      var esito = function(res, giaFatti){
+        if(!res || res.error){
+          showAlert('NON cancellato: il cloud non ha risposto (' + ((res && res.error && res.error.message) || 'rete') + '). L\'archivio ' + scope + ' è ancora tutto lì: controlla la connessione e riprova.');
+          return;
+        }
+        var n = ((res.data) || []).length + (giaFatti || 0);
+        showAlert('Archivio compiti ' + scope + ' eliminato: ' + n + (n === 1 ? ' compito cancellato.' : ' compiti cancellati.'));
+        apriArchivioCompiti();
+      };
       try{
         if(!senzaClasse){
-          SB.from('fatt_tentativi').delete().eq('modalita', 'compiti').eq('classe', classe).then(fatto, errore);
+          // .select() fa tornare le righe cancellate: cosi' posso dirti QUANTE ne sono sparite davvero
+          SB.from('fatt_tentativi').delete().eq('modalita', 'compiti').eq('classe', classe).select('id')
+            .then(function(res){ esito(res, 0); }, function(){ esito(null); });
         } else {
           // «Senza classe» = le righe con classe vuota o mancante. SOLO quelle.
-          SB.from('fatt_tentativi').delete().eq('modalita', 'compiti').is('classe', null).then(function(){
-            SB.from('fatt_tentativi').delete().eq('modalita', 'compiti').eq('classe', '').then(fatto, errore);
-          }, errore);
+          SB.from('fatt_tentativi').delete().eq('modalita', 'compiti').is('classe', null).select('id').then(function(r1){
+            if(!r1 || r1.error){ esito(r1); return; }
+            var n1 = ((r1.data) || []).length;
+            SB.from('fatt_tentativi').delete().eq('modalita', 'compiti').eq('classe', '').select('id')
+              .then(function(r2){ esito(r2, n1); }, function(){ esito(null); });
+          }, function(){ esito(null); });
         }
       }catch(e){ showAlert('Errore: ' + e.message); }
     });
