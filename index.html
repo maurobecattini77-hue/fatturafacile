@@ -1393,6 +1393,27 @@
       }, function(){ cb && cb(false, 'il cloud non ha risposto'); });
     }catch(e){ cb && cb(false, 'errore imprevisto'); }
   }
+  // Accende/spegne la pubblicazione del voto di UN alunno (il badge sotto il voto fa da interruttore).
+  // Spegnendola il voto sparisce all'alunno: la vista alunno guarda `valutazione.pubblicata`.
+  // NON tocca il voto né lo snapshot del lavoro: si spegne solo la luce, la valutazione resta intatta e
+  // riaccendendola l'alunno rivede tutto com'era. Nessuna notifica all'alunno, né accendendo né spegnendo.
+  // cb(ok, err): come sempre, niente annunci senza la conferma del cloud (.select() ridà la riga scritta).
+  function cloudSetPubblicata(pin, on, cb){
+    var v = (CLOUD_STUD[pin] || {}).valutazione;
+    if(!v || !v.voto_finale){ cb && cb(false, 'questo alunno non ha un voto'); return; }
+    if(!SB){ cb && cb(false, 'nessun collegamento al cloud'); return; }
+    var vNew = {}; for(var k in v) vNew[k] = v[k];
+    vNew.pubblicata = !!on;
+    try{
+      SB.from('fatt_studenti').update({ valutazione:vNew }).eq('pin', pin).select('pin,valutazione').then(function(res){
+        if(!res || res.error || !res.data || !res.data.length){ cb && cb(false, (res && res.error && res.error.message) || 'il cloud non ha confermato'); return; }
+        var scritto = res.data[0].valutazione;
+        if(!scritto || !!scritto.pubblicata !== !!on){ cb && cb(false, 'il cloud ha risposto, ma il voto non risulta come previsto'); return; }
+        CLOUD_STUD[pin].valutazione = scritto;   // copia locale = quello che c'è DAVVERO nel cloud
+        cb && cb(true, null);
+      }, function(){ cb && cb(false, 'il cloud non ha risposto'); });
+    }catch(e){ cb && cb(false, 'errore imprevisto'); }
+  }
   // Blocco anti-doppio-accesso: controlla se l'alunno può entrare e aggiorna lo stato.
   function cloudCheckAccesso(pin, cb){
     if(!SB){ cb && cb({ allow:true }); return; }
@@ -2324,6 +2345,20 @@
         if((azcell.getAttribute('data-az')||'none') !== want){
           azcell.innerHTML=''; azcell.setAttribute('data-az', want);
           var wb = buildAzButton(want, a); if(wb) azcell.appendChild(wb);
+        }
+      }
+      // VOTO e VALUTA vanno rinfrescati qui come lo stato, altrimenti restano quelli del primo disegno.
+      // Da quando «Valuta» compare SOLO a verifica consegnata, questo non è un dettaglio: senza, l'alunno
+      // consegna, il docente vede «Consegnato»... e il link «Valuta» non appare. Sembra rotto e non lo è.
+      // (Il difetto l'ho creato io col controllo nuovo, e l'ho visto solo provandolo dal vivo.)
+      var riga = document.querySelector('#roster-body tr[data-pin="'+a.pin+'"]');
+      if(riga){
+        var vs = (CLOUD_STUD[a.pin] || {}).valutazione || {};
+        var firma = (st.done ? '1' : '0') + '|' + (vs.voto_finale || '') + '|' + (vs.pubblicata ? '1' : '0') + '|' + (st.assente ? '1' : '0');
+        if(riga.getAttribute('data-firma-voto') !== firma){
+          riga.setAttribute('data-firma-voto', firma);
+          var vecchioVoto = riga.querySelector('.voto-cell'); if(vecchioVoto) riga.replaceChild(buildVotoCell(a), vecchioVoto);
+          var vecchiaVal = riga.querySelector('.valuta-cell'); if(vecchiaVal) riga.replaceChild(buildValutaCell(a), vecchiaVal);
         }
       }
     });
@@ -3398,7 +3433,7 @@
   }
   // Colonna VOTO: pastiglia colorata centrata (verde se sufficiente, ambra se no), '—' se non valutato.
   function buildVotoCell(a){
-    var td = document.createElement('td'); td.style.textAlign = 'center';
+    var td = document.createElement('td'); td.className = 'voto-cell'; td.style.textAlign = 'center';
     var val = (CLOUD_STUD[a.pin] || {}).valutazione;
     if(val && val.voto_finale){
       var suff = (val.perc != null && val.perc >= 59.1); // sufficiente = voto >= 6
@@ -3407,17 +3442,36 @@
       sp.style.cssText = 'display:inline-block; border-radius:20px; padding:3px 13px; font-size:14px; font-weight:600; ' + (suff ? 'background:#eaf3de; color:#3b6d11;' : 'background:#faeeda; color:#854f0b;');
       wrap.appendChild(sp);
       // Indicatore a colpo d'occhio: voto pubblicato (visibile all'alunno) o ancora da pubblicare.
+      // È anche un INTERRUTTORE (Mauro, 17/07): un clic accende o spegne la pubblicazione di QUESTO alunno.
+      // Serve quando hai pubblicato ma vuoi rivedere la valutazione con calma: lo spegni, il voto sparisce
+      // all'alunno, e lo riaccendi quando sei convinto. Senza, per rimetterne su uno solo dovresti
+      // ripubblicare tutta la classe.
       var badge = document.createElement('span');
-      if(val.pubblicata){ badge.textContent = '✓ pubblicato'; badge.style.cssText = 'font-size:10px; font-weight:700; color:#3b6d11; white-space:nowrap;'; badge.title = 'L\'alunno lo vede entrando col PIN'; }
-      else { badge.textContent = '• da pubblicare'; badge.style.cssText = 'font-size:10px; font-weight:600; color:#a9772b; white-space:nowrap;'; badge.title = 'Valutato ma non ancora pubblicato: premi «Pubblica voti»'; }
+      badge.style.cursor = 'pointer';
+      if(val.pubblicata){ badge.textContent = '✓ pubblicato'; badge.style.cssText += 'font-size:10px; font-weight:700; color:#3b6d11; white-space:nowrap; text-decoration:none;'; badge.title = 'L\'alunno lo vede entrando col PIN. Clicca per NASCONDERGLIELO.'; }
+      else { badge.textContent = '• da pubblicare'; badge.style.cssText += 'font-size:10px; font-weight:600; color:#a9772b; white-space:nowrap;'; badge.title = 'L\'alunno NON lo vede. Clicca per pubblicarlo solo a lui.'; }
+      badge.addEventListener('click', function(){ chiediPubblicazione(a, !!val.pubblicata); });
       wrap.appendChild(badge);
       td.appendChild(wrap);
     } else { var d = document.createElement('span'); d.textContent = '—'; d.style.color = '#b4b2a9'; td.appendChild(d); }
     return td;
   }
   // Colonna VALUTA: piccolo link centrato che apre la scheda di valutazione (anche per rivedere/cambiare).
+  // SI VALUTA SOLO A VERIFICA CONSEGNATA (regola di Mauro, 17/07). Prima il link c'era sempre: si poteva
+  // mettere un voto a uno che stava ancora scrivendo, o che aveva consegnato 1 fattura su 3 — un voto dato
+  // su un lavoro a metà, senza accorgersene. Vale la consegna PIENA, sua o forzata dal docente (st.done);
+  // la consegna parziale («Consegnato 2 di 3») NON basta.
+  // ECCEZIONE: se un voto c'è già, il link resta sempre. Quello non è valutare un compito in corso, è
+  // correggere il proprio lavoro — e Mauro deve poterlo fare quando vuole, anche dopo un «Riammetti».
   function buildValutaCell(a){
-    var td = document.createElement('td'); td.style.textAlign = 'center';
+    var td = document.createElement('td'); td.className = 'valuta-cell'; td.style.textAlign = 'center';
+    var st = statoAlunno(a.pin);
+    var giaValutato = !!((CLOUD_STUD[a.pin] || {}).valutazione || {}).voto_finale;
+    if(!st.done && !giaValutato){
+      var d = document.createElement('span'); d.textContent = '—'; d.style.color = '#b4b2a9';
+      d.title = st.assente ? 'Assente: niente da valutare.' : 'Si valuta solo a verifica consegnata (tutte le fatture assegnate).';
+      td.appendChild(d); return td;
+    }
     var lnk = document.createElement('span'); lnk.className = 'lnk-valuta'; lnk.textContent = 'Valuta';
     lnk.addEventListener('click', function(){ apriValutazione(a); });
     td.appendChild(lnk); return td;
@@ -3443,6 +3497,28 @@
   function setClasseAttiva(nome){
     var c = CLASSES.find(function(x){ return x.classe === nome; });
     if(c){ CLASSE = c; STATE.classeAttiva = nome; try{ localStorage.setItem('ff_classe', JSON.stringify(c)); }catch(e){} renderDocente(); }
+  }
+  // Conferma dell'interruttore di pubblicazione. NOMINA l'alunno e dice cosa vedrà lui: è l'unico modo di
+  // accorgersi di un clic finito sulla riga sbagliata prima che l'alunno se ne accorga da casa.
+  function chiediPubblicazione(a, eraPubblicata){
+    var nome = ((a.cognome || '') + ' ' + (a.nome || '')).trim();
+    var v = (CLOUD_STUD[a.pin] || {}).valutazione || {};
+    var voto = v.voto_finale || '';
+    var msg = eraPubblicata
+      ? ('Nascondere il voto di ' + nome + '?\n\nIl voto ' + voto + ' resta salvato qui e tu puoi modificarlo, ma entrando col PIN non lo vedrà più.\n\nPuoi ripubblicarlo quando vuoi.')
+      : ('Pubblicare il voto di ' + nome + '?\n\nSolo questo alunno: entrando col PIN vedrà il voto ' + voto + ' e il suo lavoro corretto. Gli altri della classe non sono toccati.');
+    showConfirm(msg, function(){
+      cloudSetPubblicata(a.pin, !eraPubblicata, function(ok, err){
+        if(!ok){
+          showAlert('Non sono riuscito a ' + (eraPubblicata ? 'nascondere' : 'pubblicare') + ' il voto di ' + nome + ': ' + (err || 'il cloud non ha risposto') + '.\n\nNon è cambiato niente: per l\'alunno è come prima. Controlla il collegamento e riprova.');
+          return;
+        }
+        renderDocente();
+        showAlert(eraPubblicata
+          ? ('Voto di ' + nome + ' nascosto. Se entra col PIN non lo vede più. Il voto è ancora qui: puoi cambiarlo e ripubblicarlo quando vuoi.')
+          : ('Voto di ' + nome + ' pubblicato: entrando col PIN vede il voto ' + voto + ' e il suo lavoro corretto.'));
+      });
+    });
   }
   // Conferma dell'appello. Il messaggio NOMINA l'alunno: un clic distratto sulla riga sbagliata deve essere
   // fermato qui, non scoperto a verifica finita. Se sta lavorando adesso glielo dico, e decide lui.
