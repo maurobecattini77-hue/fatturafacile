@@ -891,7 +891,9 @@
     document.body.appendChild(ov);
     ov.querySelector('.modal-btn-ok').focus();
   }
-  function showConfirm(msg, onOk){
+  // onAnnulla (facoltativo): serve dove anche il "no" ha qualcosa da dire — es. il Reset, che deve
+  // rassicurare che non ha cancellato niente. Chi passa solo onOk continua a funzionare come prima.
+  function showConfirm(msg, onOk, onAnnulla){
     var ov = document.createElement('div'); ov.className = 'modal-overlay';
     ov.innerHTML = '<div class="modal-card"><div class="modal-body"></div>' +
       '<div class="modal-actions">' +
@@ -899,8 +901,9 @@
         '<button type="button" class="modal-btn modal-btn-ok">OK</button>' +
       '</div></div>';
     ov.querySelector('.modal-body').textContent = msg;
-    ov.querySelector('.modal-btn-cancel').addEventListener('click', function(){ closeModal(ov); });
-    ov.addEventListener('mousedown', function(e){ if(e.target === ov) closeModal(ov); });
+    var annulla = function(){ closeModal(ov); if(typeof onAnnulla === 'function') onAnnulla(); };
+    ov.querySelector('.modal-btn-cancel').addEventListener('click', annulla);
+    ov.addEventListener('mousedown', function(e){ if(e.target === ov) annulla(); });
     ov.querySelector('.modal-btn-ok').addEventListener('click', function(){ closeModal(ov); if(typeof onOk === 'function') onOk(); });
     document.body.appendChild(ov);
     ov.querySelector('.modal-btn-ok').focus();
@@ -4684,13 +4687,20 @@
   byId('btn-reset').addEventListener('click', function(){
     var cl = (CLASSE && CLASSE.classe) || STATE.classeAttiva || '';
     if(!cl){ showAlert('Nessuna classe selezionata da azzerare. Carica o scegli una classe.'); return; }
-    showConfirm('Resettare la classe ' + cl + '? Passerà ai COMPITI A CASA (i suoi alunni, col PIN, faranno i compiti) e uscirà dalla dashboard.\n\n🛟 Prima di azzerare, l\'app SCARICA DA SOLA un backup di sicurezza di questa classe (con le verifiche consegnate). Così, anche se dimentichi di valutarle, non le perdi.\n\n⚠ Le verifiche consegnate vengono poi CANCELLATE dal cloud (restano solo nel file di backup appena scaricato). I voti già messi restano (gli alunni li vedono nei compiti). I compiti a casa e le altre classi non si toccano.', function(){
+    showConfirm('Resettare la classe ' + cl + '? Passerà ai COMPITI A CASA (i suoi alunni, col PIN, faranno i compiti) e uscirà dalla dashboard.\n\n🛟 Prima di azzerare preparo un backup di sicurezza di questa classe (con le verifiche consegnate), e ti chiederò di confermare che il file è stato salvato.\n\n⚠ Le verifiche consegnate vengono poi CANCELLATE dal cloud (restano solo nel file di backup). I voti già messi restano (gli alunni li vedono nei compiti). I compiti a casa e le altre classi non si toccano.', function(){
       // BACKUP AUTOMATICO DI SICUREZZA prima di cancellare le consegne. Se fallisce, NON resetto (niente perdita di dati).
       backupClasse(function(ok){
         if(!ok){
           showAlert('Backup automatico NON riuscito: il Reset è stato ANNULLATO per non rischiare di perdere le verifiche. Controlla la connessione e riprova.');
           return;
         }
+        // ATTENZIONE: qui "ok" significa solo CHE HO AVVIATO IL DOWNLOAD, non che il file sia sul disco:
+        // il browser non lo dice a nessun programma. Se e' impostato su «chiedi dove salvare», resta aperta
+        // una finestra e il file NON viene scritto finche' l'utente non risponde. Prima l'app cancellava
+        // comunque le verifiche annunciando «Backup di sicurezza scaricato»: la rete di sicurezza era una
+        // illusione. Visto succedere davvero il 17/07: finestra di salvataggio rimasta in attesa tutta la
+        // notte, verifiche gia' cancellate. Ora l'unico che puo' confermare che il file esiste sei tu.
+        showConfirm('🛟 BACKUP PRONTO: «backup_' + cl + '_' + ff_dateStamp() + '.json».\n\nControlla ORA che sia nella cartella Download. Se il browser ti ha chiesto dove salvarlo, salvalo adesso (la finestra potrebbe essere dietro a questa).\n\nPremi OK SOLO se il file c\'è davvero: subito dopo le verifiche consegnate della ' + cl + ' verranno cancellate dal cloud e resteranno solo in quel file.\n\nSe non lo trovi, premi Annulla: non verrà cancellato niente.', function(){
         cloudResetClasse(cl);
         cloudSetModalitaCompiti(cl, true); // dopo il Reset la classe passa in modalità compiti a casa
         STATE.assegnate = []; STATE.assegnataId = null;
@@ -4703,7 +4713,10 @@
           });
         }catch(e){}
         renderDocente();
-        showAlert('Classe ' + cl + ' resettata. 🛟 Backup di sicurezza scaricato (cerca «backup_' + cl + '_...json» nella cartella Download). La classe è passata ai COMPITI A CASA. Per rifarci una verifica, ricaricala con «Carica classe».');
+        showAlert('Classe ' + cl + ' resettata. Le verifiche consegnate ora vivono SOLO nel file di backup che hai salvato: tienilo da parte finché non hai messo i voti. La classe è passata ai COMPITI A CASA. Per rifarci una verifica, ricaricala con «Carica classe».');
+        }, function(){   // Annulla sulla conferma del backup: non si tocca NIENTE
+          showAlert('Reset ANNULLATO: non è stato cancellato niente. Le verifiche della ' + cl + ' sono ancora tutte nel cloud.\n\nSe il backup non è stato salvato, controlla le impostazioni di download del browser (o la finestra «Salva con nome» rimasta aperta) e riprova.');
+        });
       }, true); // true = silenzioso: i messaggi li do io qui
     });
   });
