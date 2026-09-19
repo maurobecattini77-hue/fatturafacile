@@ -875,6 +875,11 @@
     return isNaN(n) ? 0 : n;
   }
   function round2(n){ return Math.round((n+Number.EPSILON)*100)/100; }
+  /* (19/09/2026) PROTEZIONE SUI CESTINI DELLA FATTURA. Tolta una riga, quella sotto sale allo stesso posto col
+     cestino nello stesso punto, e un secondo tocco ravvicinato (sul telefono capita) cancellava anche lei.
+     Mezzo secondo di guardia fra un cestino e l'altro. */
+  var ULTIMO_CESTINO = 0;
+  function cestinoOk(){ var t = Date.now(); if(t - ULTIMO_CESTINO < 500) return false; ULTIMO_CESTINO = t; return true; }
   function esc(s){ return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
   function autogrow(t){ t.style.height='auto'; t.style.height=(t.scrollHeight)+'px'; }
   function isEmpty(v){ return !v || !String(v).trim(); }
@@ -949,7 +954,22 @@
      (SB.rpc), che gli danno solo il SUO e mai le soluzioni. Le tabelle le apre solo il DOCENTE, riconosciuto
      da Supabase con email e password: il riconoscimento vive in questa scheda (sessionStorage), cosi' chiusa
      la scheda si e' fuori, e non si mescola con quello delle altre app sullo stesso indirizzo. */
-  try{ if(window.supabase){ SB = window.supabase.createClient(SB_URL, SB_KEY, { auth:{ storage: window.sessionStorage, storageKey:'ff-docente-auth', persistSession:true, autoRefreshToken:true, detectSessionInUrl:false } }); } }catch(e){}
+  /* TEMPO MASSIMO SU OGNI RICHIESTA (19/09/2026, come in Cedolino Facile). Col telefono che prende poco una
+     richiesta puo' restare APPESA: non fallisce e non risponde, e tutto quello che aspettava la risposta («Invio
+     in corso…», «Chiudi e consegna», il ribusso di «Accesso bloccato») restava fermo per sempre, perche' i
+     ritentativi scattano solo davanti a un errore. Dopo 25 secondi la richiesta appesa viene troncata: diventa
+     un errore come gli altri, e i ritentativi che gia' esistono fanno il loro mestiere. */
+  var TEMPO_MASSIMO_RICHIESTA_MS = 25000;
+  function fetchConTempoMassimo(risorsa, opzioni){
+    if(typeof AbortController === 'undefined') return fetch(risorsa, opzioni);
+    var ac = new AbortController();
+    var o = {}; for(var k in (opzioni || {})) o[k] = opzioni[k];
+    if(o.signal){ try{ o.signal.addEventListener('abort', function(){ ac.abort(); }); }catch(e){} }
+    o.signal = ac.signal;
+    var sveglia = setTimeout(function(){ try{ ac.abort(); }catch(e){} }, TEMPO_MASSIMO_RICHIESTA_MS);
+    return fetch(risorsa, o).then(function(r){ clearTimeout(sveglia); return r; }, function(e){ clearTimeout(sveglia); throw e; });
+  }
+  try{ if(window.supabase){ SB = window.supabase.createClient(SB_URL, SB_KEY, { global:{ fetch: fetchConTempoMassimo }, auth:{ storage: window.sessionStorage, storageKey:'ff-docente-auth', persistSession:true, autoRefreshToken:true, detectSessionInUrl:false } }); } }catch(e){}
   /* MESSAGGIO CHE DEVE PARTIRE ANCHE SE IL TELEFONO CONGELA O CHIUDE LA PAGINA: `keepalive` e' la promessa del
      browser di spedirlo comunque. Serve a due soli messaggi, brevi: «sono passato in secondo piano» e «ho chiuso». */
   function rpcSubito(nome, corpo){
@@ -1193,6 +1213,7 @@
   // Blocca lo schermo dell'alunno quando il DOCENTE ha consegnato al posto suo (nessuna scrittura: le fa il docente).
   function bloccaPerConsegnaDocente(){
     if(STATE.consegnata) return;
+    mettiAlSicuroLavoro();           // l'ultima versione resta almeno nel dispositivo e nella bozza: serve se il docente riammette
     STATE.consegnata = true;
     stopConsegnaWatcher();
     stopPresenza();
@@ -1294,6 +1315,9 @@
     if(!SB){ cb && cb(); return; }
     try{
       SB.rpc('ff_mie_consegne', { p_pin: pin }).then(function(res){
+        // Rete muta = NON SO NULLA: tengo i segni che ho. Prima un buco di rete li cancellava, e una fattura
+        // gia' consegnata tornava «Compila» (19/09/2026).
+        if(!res || res.error || !Array.isArray(res.data)){ cb && cb(); return; }
         if(res && res.data) res = { data: res.data.filter(function(t){ return t.completato && t.modalita !== 'compiti'; }) };
         var ids = {};
         ((res && res.data) || []).forEach(function(t){ if(t.fattura_id && t.modalita !== 'forzata') ids[t.fattura_id] = true; });
@@ -1317,11 +1341,17 @@
       SB.rpc('ff_mio_lavoro', {
         p_pin: pin, p_sess: sessMia(), p_dispositivo: idDispositivo(), p_fattura_id: fatturaId
       }).then(function(res){
-        var d = (res && !res.error) ? res.data : null;
-        if(d && d.html){ cb && cb({ html: d.html, ts: (d.ts || 0) }); return; }
-        cb && cb(null);
-      }, function(){ cb && cb(null); });
-    }catch(e){ cb && cb(null); }
+        // cb(lavoro, errore). «Il cloud non ha risposto» e «nel cloud non c'e' niente» sono due cose DIVERSE:
+        // scambiarle voleva dire aprire il foglio bianco a chi il lavoro ce l'aveva (19/09/2026).
+        if(!res || res.error){ cb && cb(null, true); return; }
+        var d = res.data;
+        // «negato»: la porta non riconosce ancora questo dispositivo (l'ingresso non e' arrivato al cloud).
+        // Non vuol dire che il lavoro non c'e': si riprova, intanto il battito si fa ridare il gettone.
+        if(d && d.negato){ cb && cb(null, true); return; }
+        if(d && d.html){ cb && cb({ html: d.html, ts: (d.ts || 0) }, false); return; }
+        cb && cb(null, false);
+      }, function(){ cb && cb(null, true); });
+    }catch(e){ cb && cb(null, true); }
   }
   function cloudSetAssegnazione(id, liv){
     if(!SB) return;
@@ -1337,6 +1367,34 @@
      la vittima — l'esatto contrario di quello che deve fare l'anti-doppio-accesso. */
   function cloudPresenza(){
     if(!SB || !STATE.studente || !STATE.proprietario) return;   // se non sei il proprietario, non scrivi
+    /* (19/09/2026) SENZA GETTONE NON SI BATTE: PRIMA CE LO SI FA DARE. Succede a chi e' entrato mentre il cloud
+       taceva (vedi cloudCheckAccesso): senza gettone ogni scrittura verrebbe rifiutata. Ribusso alla porta
+       dell'accesso, che decide come sempre: se mi fa entrare ho il gettone e da qui in poi e' tutto normale; se
+       mi respinge vuol dire che questo PIN lo sta usando un altro dispositivo, e finisco su «Accesso bloccato»
+       come chiunque bussi per secondo. */
+    if(!sessMia() && !STATE.modalitaCompiti){
+      if(STATE.gettoneInVolo && (Date.now() - STATE.gettoneInVolo) < 8000) return;
+      STATE.gettoneInVolo = Date.now();
+      var pinG = STATE.studente.pin;
+      try{
+        SB.rpc('ff_accesso', { p_pin: pinG, p_dispositivo: idDispositivo() }).then(function(rg){
+          STATE.gettoneInVolo = 0;
+          var dg = (rg && !rg.error) ? rg.data : null;
+          if(!dg || !STATE.studente || STATE.studente.pin !== pinG) return;
+          if(dg.sessione){ tieniGettone(dg.sessione); cloudPresenza(); return; }
+          if(dg.allow === false && !dg.consegnata && !STATE.consegnata){
+            try{ if(STATE.saveTimer){ clearTimeout(STATE.saveTimer); STATE.saveTimer = null; } salvaLavoro(); }catch(e){}
+            stopPresenza(); stopAttesaWatcher();
+            STATE.proprietario = false; STATE.avviatoPin = null;
+            try{ sessionStorage.removeItem('ff_studente_attivo'); }catch(e){}
+            var bn = byId('blocco-nome'); if(bn) bn.textContent = STATE.studente.cognome + ' ' + STATE.studente.nome;
+            mostraBloccoMsg('🔒', 'Accesso bloccato', 'Hai già effettuato l\'accesso in precedenza. Per continuare, chiedi lo sblocco al docente.', '#b4472f');
+            startBloccoWatcher();
+          }
+        }, function(){ STATE.gettoneInVolo = 0; });
+      }catch(e){ STATE.gettoneInVolo = 0; }
+      return;
+    }
     // Rete lenta: se il battito di prima e' ancora per strada (da meno di 8 secondi) non gliene accodo un altro.
     if(STATE.battitoInVolo && (Date.now() - STATE.battitoInVolo) < 8000) return;
     STATE.battitoInVolo = Date.now();
@@ -1510,9 +1568,20 @@
     }catch(e){ cb && cb(false, 'errore imprevisto'); }
   }
   // Blocco anti-doppio-accesso: controlla se l'alunno può entrare e aggiorna lo stato.
-  function cloudCheckAccesso(pin, cb){
+  function cloudCheckAccesso(pin, cb, tentativo){
     if(!SB){ cb && cb({ allow:true }); return; }
     STATE.riammesso = false; // sessione pulita: si accende solo se il cloud dice "riammesso"
+    /* (19/09/2026) RITENTA, come il login. Prima un solo buco di rete qui faceva entrare l'alunno SENZA GETTONE:
+       per tutta l'ora il cloud gli rifiutava bozza, battito e consegna, e dopo due battiti rifiutati compariva
+       «Sessione chiusa». Cinque tentativi in una dozzina di secondi; se proprio il cloud tace lo faccio entrare
+       lo stesso (meglio lavorare che restare fuori) e il gettone se lo fa ridare il battito: vedi cloudPresenza.
+       Ribussare dallo STESSO dispositivo non blocca nessuno: la porta lo riconosce. */
+    var t = tentativo || 0;
+    var muta = function(){
+      if(t >= 4){ cb && cb({ allow:true }); return; }
+      try{ var e = byId('err-alunno'); if(e && byId('gate').style.display !== 'none') e.textContent = 'Il collegamento è debole: sto riprovando…'; }catch(x){}
+      setTimeout(function(){ cloudCheckAccesso(pin, cb, t + 1); }, 1200 + t * 800);
+    };
     try{
       /* 19/09/2026 — LA REGOLA DEL BLOCCO, uguale a Cedolino Facile e alla dashboard verifiche, decisa sul server
          (porta ff_accesso) con UN OROLOGIO SOLO: collegato = segnale negli ultimi 20 secondi.
@@ -1524,14 +1593,15 @@
          Qui resta solo il gettone che il server consegna: senza quello questo dispositivo non scrive niente. */
       SB.rpc('ff_accesso', { p_pin: pin, p_dispositivo: idDispositivo() }).then(function(res){
         var d = (res && !res.error) ? res.data : null;
-        // Rete muta: NON blocco nessuno (come prima). Meglio far lavorare che chiudere fuori per un buco di wifi.
-        if(!d || d.trovato === false){ cb && cb({ allow:true }); return; }
+        // Rete muta: ritento; e se alla fine tace ancora NON blocco nessuno. Meglio far lavorare che chiudere fuori per un buco di wifi.
+        if(!d){ muta(); return; }
+        if(d.trovato === false){ cb && cb({ allow:true }); return; }
         if(d.sessione) tieniGettone(d.sessione);
         if(d.riammesso) STATE.riammesso = true;
         if(d.allow){ cb && cb({ allow:true }); return; }
         cb && cb({ allow:false, consegnata: !!d.consegnata });
-      }, function(){ cb && cb({ allow:true }); });
-    }catch(e){ cb && cb({ allow:true }); }
+      }, function(){ muta(); });
+    }catch(e){ muta(); }
   }
   function cloudSetStato(pin, stato){
     if(!SB || !pin) return;
@@ -1576,6 +1646,7 @@
   // solo i timer e la presenza (così al rientro non scatta il blocco anti-doppio-accesso).
   function terminaSessioneVerifica(){
     if(STATE.sessioneChiusa) return;      // una volta sola
+    mettiAlSicuroLavoro();                // gli ultimi tasti prima di tutto, finche' so ancora di chi e' il foglio
     STATE.sessioneChiusa = true;
     var pin = STATE.studente ? STATE.studente.pin : '';
     stopSessioneWatcher();
@@ -1601,7 +1672,10 @@
     return !!(STATE.sessTokenConfirmed && STATE.sessToken && sessioneCloud && sessioneCloud !== STATE.sessToken);
   }
   function terminaSessionePerAltroDispositivo(){
-    if(STATE.sessioneChiusa) return; STATE.sessioneChiusa = true;
+    if(STATE.sessioneChiusa) return;
+    // Il cloud non accetta piu' niente da qui, ma nel DISPOSITIVO l'ultima versione ci deve restare.
+    try{ if(STATE.saveTimer){ clearTimeout(STATE.saveTimer); STATE.saveTimer = null; } if(!STATE.caricamentoFoglio && byId('editor').style.display !== 'none') salvaLavoro(); }catch(e){}
+    STATE.sessioneChiusa = true;
     stopSessioneWatcher(); stopAssegnazioneWatcher(); stopConsegnaWatcher(); stopBloccoWatcher(); stopAttesaWatcher();
     stopPresenza();                       // niente più battiti da questo dispositivo (non deve resuscitare)
     STATE.proprietario = false;           // non sono più il proprietario: non scrivo più presenza né consegne
@@ -1655,7 +1729,9 @@
     var firma = serializeAssegnazione(lista);
     if(STATE.archivioChiestoPer === firma) return false;
     STATE.archivioChiestoPer = firma;
-    cloudAggiornaArchivio(function(){});
+    // Se la richiesta fallisce (in classe partono venticinque dispositivi nello stesso istante) si RICHIEDE al
+    // giro dopo: prima restava segnata come fatta, e l'alunno rimaneva piantato su «In attesa» (19/09/2026).
+    cloudAggiornaArchivio(function(ok){ if(!ok && STATE.archivioChiestoPer === firma) STATE.archivioChiestoPer = null; });
     return true;
   }
   // Guarda la riga tornata col battito: il giro completo (quello coi pop-up) parte SOLO se c'e' qualcosa di nuovo.
@@ -1806,7 +1882,9 @@
       try{ SB.from('fatt_studenti').update({ stato:'da_consegnare' }).eq('pin', pin).then(function(){}, function(){}); }catch(e){}
       if(CLOUD_STUD[pin]) CLOUD_STUD[pin].stato = 'da_consegnare';
       // L'alunno vede l'ordine col battito (ogni 5 secondi): gli lascio il tempo di consegnare lui il lavoro vero.
-      setTimeout(function(){ finalizzaConsegnaForzata(pin); }, 9000);
+      // 12 secondi (erano 9): il dispositivo se ne accorge al battito dopo (fino a 5 secondi) e poi deve spedire
+      // la consegna, che e' la richiesta piu' pesante; con poco campo serve margine (19/09/2026, come in Cedolino Facile).
+      setTimeout(function(){ finalizzaConsegnaForzata(pin); }, 12000);
     } else {
       finalizzaConsegnaForzata(pin);
     }
@@ -1972,9 +2050,13 @@
       }
       var pin = STATE.studente.pin;
       if(STATE.sbloccoInCorso) return;
+      // Rete lenta: se la domanda di prima e' ancora per strada (da meno di 8 secondi) non ne accodo un'altra.
+      if(STATE.bloccoStatoInVolo && (Date.now() - STATE.bloccoStatoInVolo) < 8000) return;
+      STATE.bloccoStatoInVolo = Date.now();
       // Tutto dalle porte: lo stato lo leggo con ff_stato, e lo sblocco lo prendo con ff_accesso, che decide
       // sul server chi vince (un dispositivo solo) e mi consegna il gettone nuovo.
       SB.rpc('ff_stato', { p_pin: pin }).then(function(res){
+        STATE.bloccoStatoInVolo = 0;
         var s = (res && !res.error) ? res.data : null;
         if(!s) return;
         if(s.riammesso){
@@ -2013,7 +2095,7 @@
           if(!d3 || !d3.allow){ startBloccoWatcher(true); return; }
           rebuildConsegnateLocali(pin, function(){ cloudLeggiContestoAlunno(pin, avviaAlunnoConLista); });
         }, function(){ startBloccoWatcher(true); });
-      }, function(){});
+      }, function(){ STATE.bloccoStatoInVolo = 0; });
     }, 5000);
   }
   /* ---------- Consegne: salvataggio + Esporta HTML + Backup/Ripristina ---------- */
@@ -2486,8 +2568,18 @@
   // Chiusura della pagina: cancello la presenza SOLO se ero io il proprietario della sessione.
   // (Prima anche il dispositivo respinto lo faceva, e cancellava la presenza di chi stava lavorando.)
   // Su telefono 'pagehide' scatta anche solo bloccando lo schermo: qui si salva il lavoro e basta.
-  try{ window.addEventListener('pagehide', function(){ if(STATE.studente){ try{ if(STATE.bozzaCloudTimer){ clearTimeout(STATE.bozzaCloudTimer); STATE.bozzaCloudTimer = null; } pushBozzaCloud(); }catch(e){} } }); }catch(e){}
-  function riprendiPresenza(){ STATE.salutato = false; if(STATE.studente && STATE.proprietario && !STATE.modalitaCompiti && STATE.presenzaTimer) startPresenza(); }
+  try{ window.addEventListener('pagehide', function(){
+    if(!STATE.studente) return;
+    try{
+      // Prima gli ultimi tasti nel dispositivo (il salvataggio automatico aspetta 600 ms: chi chiude subito li
+      // perdeva), poi la bozza al cloud con l'invio che parte anche a pagina morta.
+      if(STATE.saveTimer){ clearTimeout(STATE.saveTimer); STATE.saveTimer = null; }
+      if(!STATE.caricamentoFoglio && STATE.assegnataId && byId('editor').style.display !== 'none') salvaLavoro();
+      if(STATE.bozzaCloudTimer){ clearTimeout(STATE.bozzaCloudTimer); STATE.bozzaCloudTimer = null; }
+      pushBozzaSubito();
+    }catch(e){}
+  }); }catch(e){}
+  function riprendiPresenza(){ STATE.salutato = false; if(STATE.studente && STATE.proprietario && !STATE.modalitaCompiti && !STATE.sessioneChiusa && STATE.presenzaTimer) startPresenza(); }
   function battitoSubito(sfondo){
     if(!(STATE.studente && STATE.proprietario && STATE.presenzaTimer)) return;
     if(STATE.salutato) return;   // ho gia' detto «ho chiuso»: un battito partito dopo il saluto lo sorpasserebbe e resusciterebbe la presenza
@@ -2504,6 +2596,17 @@
   try{ document.addEventListener('resume', riprendiPresenza); }catch(e){}
   try{ document.addEventListener('visibilitychange', function(){
     if(document.visibilityState === 'visible'){ riprendiPresenza(); return; }
+    /* (19/09/2026) Prima di tutto il LAVORO: un dispositivo che va in secondo piano puo' essere congelato o ucciso
+       senza preavviso. Se c'e' qualcosa di scritto che non e' ancora al sicuro (salvataggio o invio in attesa, o
+       per strada), lo salvo adesso e lo spedisco con l'invio che parte anche a pagina congelata. */
+    try{
+      if(STATE.studente && !STATE.salutato && (STATE.saveTimer || STATE.bozzaCloudTimer || STATE.bozzaInVolo || STATE.bozzaRiprovaTimer)){
+        if(STATE.saveTimer){ clearTimeout(STATE.saveTimer); STATE.saveTimer = null; }
+        if(STATE.assegnataId && byId('editor').style.display !== 'none') salvaLavoro();
+        if(STATE.bozzaCloudTimer){ clearTimeout(STATE.bozzaCloudTimer); STATE.bozzaCloudTimer = null; }
+        pushBozzaSubito();
+      }
+    }catch(e){}
     battitoSubito(true);   // va in secondo piano: lo dico col messaggio che parte comunque
   }); }catch(e){}
   /* CHIUSURA VERA della pagina (la X, non lo schermo che si spegne): lo dico al cloud, cosi' nella dashboard
@@ -3096,7 +3199,7 @@
     var holder = document.createElement('div'); holder.innerHTML = SCONTO_TEMPLATE;
     var row = holder.firstChild;
     attachMoneyNeg(row.querySelector('.dsc')); attachMoney(row.querySelector('.net'));
-    row.querySelector('.del-sconto').addEventListener('click', function(){ row.remove(); });
+    row.querySelector('.del-sconto').addEventListener('click', function(){ if(!cestinoOk()) return; row.remove(); if(LIVELLO === 3) autocalc(); });
     box.querySelector('.sconti').appendChild(row);
     row.querySelector('.motivo').focus();
   }
@@ -3105,7 +3208,7 @@
     var holder = document.createElement('div'); holder.innerHTML = SCONTO_GEN_TEMPLATE;
     var row = holder.firstChild;
     attachMoneyNeg(row.querySelector('.dsc'));
-    row.querySelector('.del-sconto').addEventListener('click', function(){ row.remove(); recomputeAll(); });
+    row.querySelector('.del-sconto').addEventListener('click', function(){ if(!cestinoOk()) return; row.remove(); recomputeAll(); if(LIVELLO === 3) autocalc(); });
     byId('sconti-generali').appendChild(row);
     recomputeAll();
     row.querySelector('.motivo').focus();
@@ -3161,7 +3264,7 @@
     autogrow(spDesc);
     spDesc.addEventListener('input', function(){ autogrow(spDesc); });
     setupSpesaSuggerimenti(row, cat);
-    row.querySelector('.sp-del').addEventListener('click', function(){ row.remove(); recomputeAll(); });
+    row.querySelector('.sp-del').addEventListener('click', function(){ if(!cestinoOk()) return; row.remove(); recomputeAll(); if(LIVELLO === 3) autocalc(); });
     var target = (cat === 'accessoria') ? 'spese-acc' : (cat === 'interessi' ? 'spese-interessi' : 'spese-art15');
     byId(target).appendChild(row);
     recomputeAll();
@@ -3192,7 +3295,16 @@
     var imp = box.querySelector('.imp'); if(imp) attachMoney(imp);
     var p = box.querySelector('.p'); if(p) attachNumber(p);
     var tr = box.querySelector('.trash');
-    if(tr){ tr.addEventListener('click', function(){ box.remove(); recomputeAll(); if(LIVELLO === 3) autocalc(); }); }
+    // (19/09/2026) Togliere un articolo non toglie solo la riga: se ne resta uno solo spariscono anche gli sconti
+    // generali e il dettaglio IVA compilato a mano. Prima bastava un tocco sbagliato, senza nessuna domanda. Ora,
+    // SE nell'articolo c'e' qualcosa di scritto, chiede conferma; un articolo vuoto sparisce subito come prima.
+    if(tr){ tr.addEventListener('click', function(){
+      if(!cestinoOk()) return;
+      var vai = function(){ box.remove(); recomputeAll(); if(LIVELLO === 3) autocalc(); };
+      var pieno = Array.prototype.some.call(box.querySelectorAll('input, textarea'), function(i){ return (i.value || '').trim() !== ''; });
+      if(!pieno){ vai(); return; }
+      showConfirm('Eliminare questo articolo?\n\nSpariscono la riga con i suoi sconti. Se resta un solo articolo spariscono anche gli sconti generali e il dettaglio IVA che hai compilato.', vai);
+    }); }
     var iva = box.querySelector('.iva');
     if(iva){ iva.addEventListener('change', function(){ recomputeAll(); if(LIVELLO === 3) autocalc(); }); }
     setupProdottoSuggerimenti(box);
@@ -3204,18 +3316,18 @@
     document.querySelectorAll('#editor .artbox .sconto-row').forEach(function(row){
       var dsc = row.querySelector('.dsc'); if(dsc) attachMoneyNeg(dsc);
       var net = row.querySelector('.net'); if(net) attachMoney(net);
-      var del = row.querySelector('.del-sconto'); if(del) del.addEventListener('click', function(){ row.remove(); });
+      var del = row.querySelector('.del-sconto'); if(del) del.addEventListener('click', function(){ if(!cestinoOk()) return; row.remove(); if(LIVELLO === 3) autocalc(); });
     });
     document.querySelectorAll('#sconti-generali .sconto-gen-row').forEach(function(row){
       var dsc = row.querySelector('.dsc'); if(dsc) attachMoneyNeg(dsc);
-      var del = row.querySelector('.del-sconto'); if(del) del.addEventListener('click', function(){ row.remove(); recomputeAll(); });
+      var del = row.querySelector('.del-sconto'); if(del) del.addEventListener('click', function(){ if(!cestinoOk()) return; row.remove(); recomputeAll(); if(LIVELLO === 3) autocalc(); });
     });
     document.querySelectorAll('.spesa-row').forEach(function(row){
       var cat = row.getAttribute('data-cat');
       var imp = row.querySelector('.sp-imp'); if(imp) attachMoney(imp);
       var sd = row.querySelector('.sp-desc'); if(sd){ autogrow(sd); sd.addEventListener('input', function(){ autogrow(sd); }); }
       setupSpesaSuggerimenti(row, cat);
-      var del = row.querySelector('.sp-del'); if(del) del.addEventListener('click', function(){ row.remove(); recomputeAll(); });
+      var del = row.querySelector('.sp-del'); if(del) del.addEventListener('click', function(){ if(!cestinoOk()) return; row.remove(); recomputeAll(); if(LIVELLO === 3) autocalc(); });
     });
     attachCastCells();
   }
@@ -3711,7 +3823,28 @@
   }
 
   /* ---------- Router viste ---------- */
+  /* VELO SOPRA IL FOGLIO mentre si recupera il lavoro dal cloud (19/09/2026, come in Cedolino Facile). Ferma i
+     tocchi da subito, ma si FA VEDERE solo dopo mezzo secondo: con la rete buona l'alunno non se ne accorge
+     nemmeno. Niente pulsanti e niente semafori: una frase sola, che cambia se il collegamento e' debole. */
+  function velaRecupero(stato){
+    var v = byId('vela-recupero');
+    if(!stato){ if(v && v.parentNode) v.parentNode.removeChild(v); return; }
+    if(!v){
+      v = document.createElement('div'); v.id = 'vela-recupero';
+      v.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;z-index:9000;display:flex;align-items:center;justify-content:center;padding:28px;text-align:center;background:rgba(246,248,246,0);transition:background .3s ease .5s;';
+      var t = document.createElement('div'); t.id = 'vela-recupero-testo';
+      t.style.cssText = 'max-width:440px;font-weight:600;font-size:17px;line-height:1.45;color:#2f4f3f;opacity:0;transition:opacity .3s ease .5s;';
+      v.appendChild(t);
+      document.body.appendChild(v);
+      setTimeout(function(){ v.style.background = 'rgba(246,248,246,.93)'; t.style.opacity = '1'; }, 30);
+    }
+    var testo = byId('vela-recupero-testo');
+    if(testo) testo.textContent = (stato === 'muto')
+      ? 'Non riesco a recuperare il tuo lavoro: il collegamento non risponde. Il tuo lavoro è al sicuro. Dillo al prof: io intanto continuo a provare.'
+      : (stato === 'debole' ? 'Il collegamento è debole: sto recuperando il tuo lavoro…' : 'Apro il tuo lavoro…');
+  }
   function show(id){
+    if(id !== 'editor') velaRecupero(false);   // il velo «Apro il tuo lavoro…» vive solo sopra il foglio
     ['gate','docente','attesa','blocco','menu-fatture','editor','cortesia-view','soluzione-view','valuta-view'].forEach(function(x){ byId(x).style.display = (x===id) ? '' : 'none'; });
     var vb = byId('verifica-bar'); if(vb) vb.style.display = (id==='editor') ? '' : 'none';
     var tb = document.querySelector('.topbar'); if(tb) tb.style.display = (id==='gate') ? 'none' : '';
@@ -3722,7 +3855,11 @@
   function goGate(){
     // «Esci» mette al sicuro l'ULTIMO tasto prima di chiudere la sessione: senza questo, l'ultima modifica
     // ancora nel debounce andava persa (le altre uscite — «Torna ai compiti», «Le mie fatture» — già salvavano).
-    try{ if(byId('editor') && byId('editor').style.display !== 'none') salvaLavoro(); }catch(e){}
+    // (19/09/2026) e la manda SUBITO anche al cloud: l'invio ritardato non partiva piu', perche' un attimo dopo
+    // qui sotto l'alunno non c'e' piu'. Conta per chi esce da un dispositivo e rientra da un altro.
+    mettiAlSicuroLavoro();
+    STATE.recuperoGiro = (STATE.recuperoGiro || 0) + 1; STATE.caricamentoFoglio = false;   // nessun recupero in sospeso sopravvive all'uscita
+    STATE.avviatoPin = null; STATE.avvioInCorsoDa = 0; STATE.avvioGiro = (STATE.avvioGiro || 0) + 1;
     stopAttesaWatcher(); stopPresenza(); stopCollegatiTimer(); stopBloccoWatcher(); stopConsegnaWatcher(); stopAssegnazioneWatcher(); stopSessioneWatcher(); STATE.riammesso = false; STATE.modalitaCompiti = false; STATE.esercitazione = false; STATE.solExitFn = null;
     // «Esci»: cancello la presenza SOLO se ero il proprietario. Un dispositivo respinto che preme «Esci»
     // non deve far sparire dalla dashboard l'alunno vero, che sta lavorando.
@@ -4132,6 +4269,18 @@
       return;
     }
     var pin = STATE.studente ? STATE.studente.pin : null;
+    /* UN AVVIO SOLO (19/09/2026, come in Cedolino Facile). Con la rete lenta questa funzione poteva partire DUE
+       volte per lo stesso alunno («Entra» che si riabilita dopo 25 secondi mentre la prima catena e' ancora per
+       strada, due risposte di fila del sorvegliante di «In attesa», il ribusso di «Accesso bloccato»): la seconda
+       partenza azzerava la mappa delle bozze e RIDISEGNAVA il foglio mentre l'alunno ci stava scrivendo. */
+    if(pin && STATE.proprietario && STATE.avviatoPin === pin && !STATE.sessioneChiusa &&
+       (byId('editor').style.display !== 'none' || byId('menu-fatture').style.display !== 'none')){
+      return;
+    }
+    if(pin && STATE.avviatoPin === pin && STATE.avvioInCorsoDa && (Date.now() - STATE.avvioInCorsoDa) < 20000) return;
+    STATE.avvioInCorsoDa = Date.now();
+    STATE.avviatoPin = pin;
+    var giroAvvio = STATE.avvioGiro = (STATE.avvioGiro || 0) + 1;
     // QUI arriva SOLO chi è stato davvero ammesso a lavorare (chi viene respinto si ferma prima, sulla
     // schermata di blocco). Da questo momento questo dispositivo è il PROPRIETARIO della sessione: è l'unico
     // autorizzato a scrivere e cancellare la presenza di questo PIN.
@@ -4159,11 +4308,18 @@
     // riprovare a leggere (fino a 5 volte) e salvare nel cloud solo quando so cosa sto sovrascrivendo.
     // Il salvataggio LOCALE intanto continua regolarmente: il lavoro non si ferma mai.
     STATE.bozzaLetta = false;
+    // (19/09/2026) NON SI ARRENDE PIU'. Prima dopo sei tentativi smetteva, `bozzaLetta` restava falsa e per tutta
+    // l'ora il lavoro non saliva nel cloud, in silenzio: viveva solo nel dispositivo. Ora insiste finche' il cloud
+    // risponde (ogni 3 secondi all'inizio, poi ogni 10), e si ferma solo se l'alunno e' uscito o se e' partito
+    // un avvio piu' recente.
     var leggiBozzaCloud = function(tentativo){
       if(!pin || !SB){ STATE.bozzaLetta = true; return; }
+      if(STATE.avvioGiro !== giroAvvio || !STATE.studente || STATE.studente.pin !== pin || !STATE.proprietario) return;
+      var riprova = function(){ setTimeout(function(){ leggiBozzaCloud(tentativo + 1); }, tentativo < 5 ? 3000 : 10000); };
       try{
         SB.rpc('ff_bozza_leggi', { p_pin: pin, p_sess: sessMia(), p_dispositivo: idDispositivo() }).then(function(rb){
-          if(!rb || rb.error){ if(tentativo < 5) setTimeout(function(){ leggiBozzaCloud(tentativo + 1); }, 3000); return; }
+          if(STATE.avvioGiro !== giroAvvio) return;
+          if(!rb || rb.error){ riprova(); return; }
           var b = rb.data || null;
           // FONDERE, non sostituire: se la lettura arriva in ritardo (rete lenta) DOPO che l'alunno ha già scritto,
           // sostituire in blocco la mappa perderebbe la bozza appena salvata. Per ogni fattura tengo la versione
@@ -4171,13 +4327,15 @@
           if(b && typeof b === 'object'){ STATE.bozzaMappa = mergeBozzaCloud(STATE.bozzaMappa || {}, b); }
           STATE.bozzaLetta = true;
           pushBozzaCloud();   // se intanto l'alunno ha scritto, ora quel lavoro sale nel cloud
-        }, function(){ if(tentativo < 5) setTimeout(function(){ leggiBozzaCloud(tentativo + 1); }, 3000); });
+        }, function(){ riprova(); });
       }catch(e){}
     };
     leggiBozzaCloud(0);
     // Allinea le consegne LOCALI a quelle VERE del cloud, così il menù non mostra "consegnata" fantasma
     // rimaste da prove/verifiche precedenti (la verità è il cloud).
     rebuildConsegnateLocali(pin, function(){
+      STATE.avvioInCorsoDa = 0;
+      if(STATE.avvioGiro !== giroAvvio || !STATE.studente || STATE.studente.pin !== pin) return;   // uscito nel frattempo, o avvio superato
       var lista = ((ctx && ctx.lista) || []).filter(function(x){ return (typeof FATTURE!=='undefined') && FATTURE.some(function(f){ return f.id === x.id; }); });
       STATE.mieAssegnate = lista;
       STATE.multiMode = lista.length > 1;
@@ -4268,6 +4426,14 @@
       return;
     }
     stopAttesaWatcher();
+    // MENTRE IL FOGLIO SI CARICA NON SI SALVA (19/09/2026, come in Cedolino Facile). Il foglio appena aperto —
+    // BIANCO, su un dispositivo nuovo — non e' lavoro dell'alunno: se finisse salvato con l'ora di adesso
+    // andrebbe nel cloud SOPRA il lavoro vero. Finche' questa bandierina e' alzata il salvataggio tace.
+    STATE.caricamentoFoglio = true;
+    if(STATE.saveTimer){ clearTimeout(STATE.saveTimer); STATE.saveTimer = null; }   // un salvataggio programmato dal foglio di prima non deve scattare su questo
+    // Rete di sicurezza: la bandierina alzata ha senso solo finche' c'e' il velo sopra il foglio. Se per un
+    // qualsiasi imprevisto il velo non c'e', la bandierina si abbassa da sola: il salvataggio non deve MAI restare muto.
+    (function sorveglia(){ setTimeout(function(){ if(!STATE.caricamentoFoglio) return; if(!byId('vela-recupero')){ STATE.caricamentoFoglio = false; return; } sorveglia(); }, 1500); })();
     if(!STATE.modalitaCompiti && STATE.studente){ segnaIniziata(STATE.studente.pin, STATE.assegnataId); } // ha aperto questa fattura: se il docente la toglie, si chiede conferma
     STATE.verificaCorrente = f.testo; STATE.soluzioneCorrente = f.soluzione; STATE.consegnata = false;
     STATE.titoloCorrente = f.titolo;
@@ -4297,25 +4463,76 @@
     aggiornaNeretto(); // importi merce in grassetto fin dall'inizio, a ogni livello
     // Chiedo SEMPRE al cloud: se lì c'è una versione PIÙ RECENTE del locale (o se qui non c'era niente), la uso.
     // Così dopo Backup/Ripristino, cambiando PC/cellulare o entrando giorni dopo, ritrova sempre l'ultima verità.
+    /* 19/09/2026 — IL FOGLIO NON SI APRE FINCHE' NON SO COSA C'E' NEL CLOUD (come in Cedolino Facile). Prima la
+       domanda al cloud si faceva UNA volta sola, e un errore di rete valeva come «non c'e' niente»: su un
+       dispositivo nuovo (dopo uno «Sblocca», dopo un «Riprendi», da un altro PC del laboratorio) l'alunno si
+       ritrovava il foglio bianco pur avendo il lavoro salvo nel cloud, e scrivendoci sopra lo cancellava. Adesso:
+       un velo copre il foglio («Apro il tuo lavoro…»), la domanda si ripete finche' il cloud RISPONDE davvero, e
+       come scorta vale la bozza gia' letta all'ingresso. Con la rete buona il velo non fa nemmeno in tempo a
+       comparire. Chi ha la SUA copia su questo dispositivo dopo tre tentativi a vuoto lavora comunque con quella
+       (e' quasi sempre l'ultima), e io continuo a chiedere. */
     if(!STATE.modalitaCompiti && STATE.studente){
       var attesaId = STATE.assegnataId;
+      var pinRec = STATE.studente.pin;
       var localTs = local ? local.ts : -1;
-      STATE.userTypedSinceLoad = false;   // azzero: se l'alunno digita DAVVERO prima che il cloud risponda, non lo calpesto
-      cloudRecuperaLavoro(STATE.studente.pin, attesaId, function(res){
-        if(!res || !res.html || !STATE.studente) return;
-        if(STATE.assegnataId !== attesaId) return;              // nel frattempo ha cambiato fattura
-        if(STATE.consegnata) return;                            // ha già consegnato: non toccare
-        if(byId('editor').style.display === 'none') return;     // non è più nell'editor
+      var giroRec = STATE.recuperoGiro = (STATE.recuperoGiro || 0) + 1;
+      var tentativiRec = 0, foglioLibero = false;
+      STATE.userTypedSinceLoad = false;   // azzero: se l'alunno mette DAVVERO mano al foglio prima che il cloud risponda, non lo calpesto
+      var ancoraQui = function(){
+        return STATE.recuperoGiro === giroRec && STATE.studente && STATE.studente.pin === pinRec &&
+               STATE.assegnataId === attesaId && !STATE.consegnata && !STATE.modalitaCompiti &&
+               byId('editor').style.display !== 'none';
+      };
+      var liberaFoglio = function(){
+        if(foglioLibero) return;
+        foglioLibero = true;
+        if(STATE.recuperoGiro === giroRec){ STATE.caricamentoFoglio = false; velaRecupero(false); }
+      };
+      var applica = function(res){
+        if(!res || !res.html) return;
         if(res.ts <= localTs) return;                           // il locale è uguale o più fresco → tengo il locale
-        if(STATE.userTypedSinceLoad) return;                    // l'alunno ha già iniziato a digitare → non calpesto
-        byId('editor').innerHTML = res.html;
-        wireEditor();
-        reidrataDinamici();
-        sbloccaEditorRipristinato();                            // il lavoro salvato alla consegna arriva bloccato: lo riapro
-        applicaLivello(LIVELLO, false);                         // NON azzerare le anagrafiche recuperate
-        aggiornaNeretto();
-        try{ salvaLavoro(); }catch(e){}                         // allineo il locale alla versione più fresca
-      });
+        if(STATE.userTypedSinceLoad) return;                    // l'alunno ha già messo mano al foglio → non calpesto
+        var era = STATE.caricamentoFoglio; STATE.caricamentoFoglio = true;
+        try{
+          byId('editor').innerHTML = res.html;
+          wireEditor();
+          reidrataDinamici();
+          sbloccaEditorRipristinato();                          // il lavoro salvato alla consegna arriva bloccato: lo riapro
+          applicaLivello(LIVELLO, false);                       // NON azzerare le anagrafiche recuperate
+          aggiornaNeretto();
+        }catch(e){}
+        STATE.caricamentoFoglio = false;
+        try{ salvaLavoro(); }catch(e){}                         // allineo il locale alla versione più fresca (questo È il suo lavoro)
+        STATE.caricamentoFoglio = era;
+      };
+      var chiediAlCloud = function(){
+        cloudRecuperaLavoro(pinRec, attesaId, function(res, errore){
+          if(!ancoraQui()){ liberaFoglio(); return; }
+          if(!errore){
+            applica(res);                                        // il cloud ha risposto: o il lavoro, o «non c'è niente»
+            // Se la copia di QUESTO dispositivo è più fresca di quella del cloud (o nel cloud non c'è proprio),
+            // la mando su subito, col SUO orario: non aspetto che l'alunno tocchi qualcosa.
+            if(local && (!res || !res.html || res.ts < localTs) && !STATE.userTypedSinceLoad && STATE.proprietario){
+              STATE.bozzaMappa = STATE.bozzaMappa || {};
+              var gia = STATE.bozzaMappa[attesaId];
+              if(!gia || (gia.ts || 0) < localTs){ STATE.bozzaMappa[attesaId] = { html: local.html, ts: localTs }; pushBozzaCloud(); }
+            }
+            liberaFoglio(); return;
+          }
+          tentativiRec++;
+          // SCORTA: la bozza che l'ingresso ha già letto (ff_bozza_leggi). Vale solo a foglio ancora velato,
+          // quando in quella mappa c'è per forza la versione del cloud e non qualcosa scritto qui nel frattempo.
+          var scorta = (!foglioLibero && STATE.bozzaLetta && STATE.bozzaMappa) ? STATE.bozzaMappa[attesaId] : null;
+          if(scorta && scorta.html){ applica({ html: scorta.html, ts: (scorta.ts || 0) }); liberaFoglio(); return; }
+          if(local && tentativiRec >= 3) liberaFoglio();
+          if(!foglioLibero) velaRecupero(tentativiRec >= 25 ? 'muto' : (tentativiRec >= 2 ? 'debole' : 'apro'));
+          setTimeout(function(){ if(ancoraQui()) chiediAlCloud(); else liberaFoglio(); }, 2500);
+        });
+      };
+      velaRecupero('apro');
+      chiediAlCloud();
+    } else {
+      setTimeout(function(){ STATE.caricamentoFoglio = false; }, 0);   // compiti a casa: niente cloud da aspettare
     }
     var top = byId('topbar-info'); top.innerHTML = '';
     var span = document.createElement('span'); span.textContent = STATE.studente.cognome + ' ' + STATE.studente.nome + ' · classe ' + CLASSE.classe;
@@ -4507,6 +4724,12 @@
   function pushBozzaCloud(){
     if(!SB || !STATE.studente || !STATE.proprietario || STATE.modalitaCompiti) return;
     if(!STATE.bozzaLetta) return;   // non so ancora cosa c'e' nel cloud: scrivere ora cancellerebbe le altre bozze
+    // UN INVIO ALLA VOLTA (19/09/2026). La bozza e' la richiesta piu' pesante dell'app (tutta la fotografia del
+    // foglio). Con la rete lenta ne partivano diverse insieme, e una VECCHIA poteva arrivare dopo una nuova e
+    // rimettere nel cloud la versione di prima. Ora se un invio e' per strada mi segno che c'e' altro da mandare,
+    // e appena quello torna riparto con la versione piu' recente.
+    if(STATE.bozzaInVolo && (Date.now() - STATE.bozzaInVolo) < 30000){ STATE.bozzaDaRimandare = true; return; }
+    STATE.bozzaInVolo = Date.now(); STATE.bozzaDaRimandare = false;
     var pinB = STATE.studente.pin;
     var riprova = function(){
       // Con poco campo la scrittura ogni tanto non parte: riprovo da solo, in silenzio, sempre con la versione
@@ -4517,19 +4740,53 @@
     try{
       SB.rpc('ff_bozza_salva', { p_pin: pinB, p_sess: sessMia(), p_dispositivo: idDispositivo(), p_bozza: (STATE.bozzaMappa || {}) })
         .then(function(res){
-          if(!res || res.error){ riprova(); return; }
+          STATE.bozzaInVolo = 0;
+          if(!res || res.error || res.data === false){ riprova(); return; }
           if(STATE.bozzaRiprovaTimer){ clearTimeout(STATE.bozzaRiprovaTimer); STATE.bozzaRiprovaTimer = null; }
-        }, function(){ riprova(); });
-    }catch(e){ riprova(); }
+          if(STATE.bozzaDaRimandare){ STATE.bozzaDaRimandare = false; pushBozzaCloud(); }
+        }, function(){ STATE.bozzaInVolo = 0; riprova(); });
+    }catch(e){ STATE.bozzaInVolo = 0; riprova(); }
+  }
+  // Alla CHIUSURA della pagina l'invio normale verrebbe troncato a meta' (e se ce n'e' gia' uno per strada non
+  // partirebbe nemmeno): la bozza parte con `keepalive`, che il browser spedisce anche a pagina morta. Vale fino
+  // a 55.000 caratteri (il limite del browser e' 64 KB); oltre si ripiega sull'invio normale.
+  function pushBozzaSubito(){
+    try{
+      if(!SB || !STATE.studente || !STATE.proprietario || STATE.modalitaCompiti || !STATE.bozzaLetta) return;
+      var corpo = { p_pin: STATE.studente.pin, p_sess: sessMia(), p_dispositivo: idDispositivo(), p_bozza: (STATE.bozzaMappa || {}) };
+      if(JSON.stringify(corpo).length < 55000) rpcSubito('ff_bozza_salva', corpo);
+      else { STATE.bozzaInVolo = 0; pushBozzaCloud(); }
+    }catch(e){}
+  }
+  /* METTE AL SICURO GLI ULTIMI TASTI prima che la sessione si chiuda (Esci, Sospendi, chiusura della pagina,
+     consegna forzata dal docente): il salvataggio automatico aspetta 600 ms dopo l'ultimo tasto e l'invio al
+     cloud altri 1.500, e chi chiudeva in quella finestra lasciava fuori l'ultima cosa scritta. Va chiamata
+     PRIMA di toccare lo stato (STATE.studente, assegnataId…), altrimenti non sa piu' di chi e' il lavoro. */
+  function mettiAlSicuroLavoro(){
+    try{
+      if(STATE.saveTimer){ clearTimeout(STATE.saveTimer); STATE.saveTimer = null; }
+      if(STATE.caricamentoFoglio) return;                       // foglio ancora in caricamento: non e' lavoro suo
+      if(!STATE.studente || !STATE.assegnataId) return;
+      if(byId('editor').style.display === 'none') return;       // non e' sul foglio: non c'e' niente di nuovo da salvare
+      salvaLavoro();
+      if(STATE.bozzaCloudTimer){ clearTimeout(STATE.bozzaCloudTimer); STATE.bozzaCloudTimer = null; }
+      pushBozzaCloud();
+    }catch(e){}
   }
   function salvaLavoro(){
     try{
       if(!STATE.studente || STATE.consegnata) return;
+      if(STATE.caricamentoFoglio) return;                       // foglio ancora in caricamento: quello che si vede non e' (ancora) il suo lavoro
+      if(!STATE.assegnataId) return;                            // nessuna fattura aperta: non si scrive sotto la chiave «null»
       var ed = byId('editor');
       if(!ed || ed.classList.contains('sol-mode')) return;
       commitValues(ed);
       var ora = Date.now();
+      // Il dispositivo puo' rifiutare la scrittura (memoria piena, navigazione privata): la copia nel cloud deve
+      // partire LO STESSO. Prima stavano nello stesso «try» e saltavano insieme, in silenzio.
+      try{
       localStorage.setItem(chiaveLavoro(STATE.studente.pin, STATE.assegnataId), JSON.stringify({ esercizioId: STATE.assegnataId, html: ed.innerHTML, ts: ora }));
+      }catch(eLocale){}
       // Congelamento del tempo: il lavoro in corso di VERIFICA va anche nel cloud, con un piccolo ritardo
       // (accorpa le raffiche di battitura). Ogni versione porta un ORARIO (ts): al rientro vince la PIÙ RECENTE
       // fra locale e cloud, così cambiando dispositivo non ricompare più il vecchio al posto dell'ultima scritta.
@@ -5473,17 +5730,21 @@
     try{ var g=localStorage.getItem('ff_assegnata'); if(g){ STATE.assegnate=parseAssegnazione(g); STATE.assegnataId=assegnPrimoId(g); } }catch(e){}
     buildRubrica();
     var al = (CLASSE && CLASSE.alunni) ? CLASSE.alunni.find(function(a){ return a.pin === pin; }) : null;
+    // (19/09/2026) Una catena d'ingresso SUPERATA non deve piu' fare niente: dopo 25 secondi «Entra» si riabilita,
+    // l'alunno lo ripreme, e la catena lenta di prima arrivava DOPO a rifare l'ingresso una seconda volta.
+    var ancoraMio = function(){ return STATE.ingressoGiro === giro && byId('gate').style.display !== 'none'; };
     if(al){
       // Le fatture le prendo dal cloud PRIMA di entrare, SEMPRE: senza archivio l'alunno resterebbe
       // piantato su «In attesa» pur avendo la verifica assegnata, e con l'archivio vecchio in cache
       // vedrebbe le fatture di ieri (o non troverebbe affatto una fattura aggiunta dopo).
-      if(typeof FATTURE === 'undefined' || !FATTURE || !FATTURE.length){ cloudCaricaContesto(function(){ entraStudente(al); }); }
-      else { cloudAggiornaArchivio(function(){ entraStudente(al); }); }
+      if(typeof FATTURE === 'undefined' || !FATTURE || !FATTURE.length){ cloudCaricaContesto(function(){ if(ancoraMio()) entraStudente(al); }); }
+      else { cloudAggiornaArchivio(function(){ if(ancoraMio()) entraStudente(al); }); }
       return;
     }
     // non in locale: cerca nel cloud (accesso da un altro dispositivo)
     byId('err-alunno').textContent = 'Verifica in corso…';
     cloudLoginPin(pin, function(stud, esito){
+      if(!ancoraMio()) return;
       if(!stud){
         byId('err-alunno').textContent = (esito === 'rete')
           ? 'Il collegamento non risponde: il tuo PIN va bene. Aspetta qualche secondo e premi ancora «Entra».'
@@ -5491,7 +5752,7 @@
         STATE.pinIngresso = null;
         ingressoLibera(); return;
       }
-      cloudCaricaContesto(function(){ entraStudente(stud); });
+      cloudCaricaContesto(function(){ if(ancoraMio()) entraStudente(stud); });
     });
   });
   /* 19/09/2026. La password del docente non sta piu' nella pagina in nessuna forma: il controllo lo fa Supabase,
@@ -5780,12 +6041,30 @@
   // Auto-save: agganciato UNA sola volta sull'elemento #editor (persistente),
   // con debounce, così NON viene duplicato dalle chiamate a wireEditor().
   (function(){
-    var saveTimer = null;
-    function programmaSalva(ms){ if(saveTimer) clearTimeout(saveTimer); saveTimer = setTimeout(salvaLavoro, ms); }
+    // Il timer sta in STATE (e non in una variabile chiusa qui dentro) perche' chi apre un foglio nuovo o chiude
+    // la sessione deve poterlo fermare: vedi entraAlunnoView e mettiAlSicuroLavoro.
+    function programmaSalva(ms){
+      if(STATE.caricamentoFoglio) return;   // il foglio si sta montando: quello che c'e' dentro non e' ancora lavoro dell'alunno
+      if(STATE.saveTimer) clearTimeout(STATE.saveTimer);
+      STATE.saveTimer = setTimeout(function(){ STATE.saveTimer = null; salvaLavoro(); }, ms);
+    }
     byId('editor').addEventListener('input', function(e){
       if(e && e.isTrusted) STATE.userTypedSinceLoad = true;   // SOLO digitazione VERA dell'alunno (le modifiche
                                                               // automatiche dell'editor hanno isTrusted=false)
       programmaSalva(600);
+    });
+    // Anche i TOCCHI veri contano come «l'alunno ha messo mano al foglio»: pulsanti, menu e cestini cambiano il
+    // foglio senza una battitura vera, e senza questo una risposta del cloud arrivata in ritardo poteva
+    // ridisegnare il foglio sopra quello che l'alunno aveva appena fatto a colpi di tocchi.
+    document.addEventListener('click', function(e){
+      if(!e || !e.isTrusted || !e.target || !e.target.closest) return;
+      if(e.target.closest('#editor')) STATE.userTypedSinceLoad = true;
+    }, true);
+    // Un cestino o un pulsante della barra («Nuovo articolo», «Sconto», «Spese») cambiano la fattura senza nessuna
+    // battitura: prima quel cambiamento non faceva partire il salvataggio, e con un F5 subito dopo tornava indietro.
+    byId('editor').addEventListener('click', function(e){
+      if(!e || !e.isTrusted || !e.target || !e.target.closest) return;
+      if(e.target.closest('button, .trash, .del-sconto, .sp-del')) programmaSalva(700);
     });
     // Salva ANCHE quando l'alunno esce da un campo: il "blur" applica la formattazione (es. 10000 -> 10.000)
     // DOPO l'ultimo tasto, e senza questo il valore formattato non finiva mai nel cloud (cambiando dispositivo
