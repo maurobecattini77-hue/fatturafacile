@@ -881,6 +881,9 @@
   var ULTIMO_CESTINO = 0;
   function cestinoOk(){ var t = Date.now(); if(t - ULTIMO_CESTINO < 500) return false; ULTIMO_CESTINO = t; return true; }
   function esc(s){ return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  // «Becattini Prof» e' l'alunno dimostrativo del docente: negli elenchi sta sempre in cima.
+  function eProf(x){ var s = x ? ((x.cognome||'') + ' ' + (x.nome||'')) : ''; return /\bbecattini\b/i.test(s) && /\bprof\b/i.test(s); }
+  function profInCima(a, b){ return (eProf(b) ? 1 : 0) - (eProf(a) ? 1 : 0); }
   function autogrow(t){ t.style.height='auto'; t.style.height=(t.scrollHeight)+'px'; }
   function isEmpty(v){ return !v || !String(v).trim(); }
   function byId(id){ return document.getElementById(id); }
@@ -2256,7 +2259,7 @@
         var cvs = (CLOUD_STUD[pin] || {}).valutazione || null;
         data.push({ pin:pin, nome:nomeCompleto, cognome:cognome, nums:fatture.map(function(f){ return f.num; }).join(' · '), fatture:fatture, val:cvs, voto:(cvs ? cvs.voto_finale : ''), perc:(cvs && cvs.perc != null ? cvs.perc : null) });
       });
-      data.sort(function(a,b){ return (a.cognome||a.nome).localeCompare((b.cognome||b.nome), 'it'); });
+      data.sort(function(a,b){ return profInCima(a,b) || (a.cognome||a.nome).localeCompare((b.cognome||b.nome), 'it'); });
       if(!data.length){ showAlert('Nessun alunno ha ancora consegnato tutte le fatture assegnate.'); return; }
       cb(data);
     }, function(){ showAlert('Errore nel recupero delle consegne.'); });
@@ -2408,7 +2411,7 @@
         var fatture = ids.map(function(id){ var t=s.items[id]; var cC=t.cortesiaCorretta||'', dC=t.dashboardCorretta||''; if(!cC || !dC){ var rc=correttaDaArchivio(id); if(!cC) cC=rc.cort; if(!dC) dC=rc.dash; } return { num:numeroFattura(id), titolo:t.titolo, nonSvolta:false, cortesiaAlunno:ripulisciHtmlAlunno(t.cortesiaAlunno), cortesiaCorretta:cC, dashboardAlunno:ripulisciHtmlAlunno(t.dashboardAlunno), dashboardCorretta:dC }; });
         data.push({ pin:pin, nome:s.nome, cognome:s.cognome, nums:fatture.map(function(f){ return f.num; }).join(' · '), fatture:fatture });
       });
-      data.sort(function(a,b){ return (a.cognome||a.nome).localeCompare((b.cognome||b.nome), 'it'); });
+      data.sort(function(a,b){ return profInCima(a,b) || (a.cognome||a.nome).localeCompare((b.cognome||b.nome), 'it'); });
       // Il titolo del file dice la verità: se sto esportando «Senza classe», non spaccio i compiti
       // per quelli della classe attiva (prima ci scriveva il nome della classe sbagliata).
       buildExportDoc(data, senzaClasse ? '' : classe, 'Compiti a casa', 'compiti');
@@ -4050,7 +4053,7 @@
       m[c].alunni.push({ pin:s.pin, nome:s.nome||'', cognome:s.cognome||'' });
     });
     CLASSES = Object.keys(m).sort(function(a, b){ return a.localeCompare(b, 'it'); }).map(function(c){
-      m[c].alunni.sort(function(a, b){ return ((a.cognome||'') + ' ' + (a.nome||'')).localeCompare((b.cognome||'') + ' ' + (b.nome||''), 'it'); });
+      m[c].alunni.sort(function(a, b){ return profInCima(a,b) || ((a.cognome||'') + ' ' + (a.nome||'')).localeCompare((b.cognome||'') + ' ' + (b.nome||''), 'it'); });
       return m[c];
     });
     return CLASSES;
@@ -4165,7 +4168,7 @@
     var tb = byId('roster-body'); tb.innerHTML = '';
     if(!hasClasse){ tb.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--muted); padding:22px;">Nessuna classe caricata. Premi <b>Carica classe</b> per iniziare.</td></tr>'; return; }
     // Ordine FISSO per cognome (poi nome): la riga di un alunno non si sposta quando consegna.
-    var alunniOrd = CLASSE.alunni.slice().sort(function(a, b){ return ((a.cognome||'') + ' ' + (a.nome||'')).localeCompare(((b.cognome||'') + ' ' + (b.nome||'')), 'it'); });
+    var alunniOrd = CLASSE.alunni.slice().sort(function(a, b){ return profInCima(a,b) || ((a.cognome||'') + ' ' + (a.nome||'')).localeCompare(((b.cognome||'') + ' ' + (b.nome||'')), 'it'); });
     alunniOrd.forEach(function(a, i){
       var st = statoAlunno(a.pin), cs = CLOUD_STUD[a.pin] || {};
       var tr = document.createElement('tr'); tr.setAttribute('data-pin', a.pin);
@@ -5579,7 +5582,7 @@
     STATE.archivioMode = true; STATE.modalitaCompiti = false; STATE.solExitFn = null;
     STATE.menuBackFn = function(){ if(multiClasse){ renderArchivioClassi(); } else { tornaDashboardDaArchivio(); } };
     byId('menu-fatture').classList.add('arch5');
-    var pins = Object.keys(byPin).sort(function(a, b){ return (byPin[a].nome || '').localeCompare(byPin[b].nome || '', 'it'); });
+    var pins = Object.keys(byPin).sort(function(a, b){ return profInCima(byPin[a], byPin[b]) || (byPin[a].nome || '').localeCompare(byPin[b].nome || '', 'it'); });
     byId('menu-title').innerHTML = ARCH_FOLDERS_SVG + 'Compiti a casa' + (cl && cl !== '—' ? ' · Classe ' + esc(cl) : '');
     byId('menu-sub').textContent = pins.length
       ? ('Alunni che hanno consegnato compiti: ' + pins.length + '. Clicca un nome per vedere le sue fatture e le soluzioni.')
