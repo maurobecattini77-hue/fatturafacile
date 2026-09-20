@@ -2736,7 +2736,9 @@
     var nColl=0,nCorso=0,nDone=0;
     CLASSE.alunni.forEach(function(a){
       var st = statoAlunno(a.pin);
-      if(st.on) nColl++; if(st.corso) nCorso++; if(st.done){ nDone++; nColl++; }
+      if(st.on) nColl++; if(st.corso) nCorso++;
+      // «Collegati» = chi e' collegato ADESSO: chi ha consegnato conta solo se ha ancora l'app aperta.
+      if(st.done){ nDone++; if(attaccatoAllApp(CLOUD_STUD[a.pin])) nColl++; }
       var cell = document.querySelector('#roster-body tr[data-pin="'+a.pin+'"] .st-cell');
       if(cell) cell.innerHTML = '<span class="st-badge '+st.cls+'">'+esc(st.txt)+'</span>';
       // se l'alunno si è appena collegato, blocca la tendina di assegnazione (diventa testo)
@@ -4157,7 +4159,7 @@
     // (riepilogo di classe e livello predefinito rimossi: l'assegnazione si vede nelle righe alunno)
     // (il pulsante "Assegna" è stato rimosso: si assegna scegliendo dalla tendina)
     var nColl = 0, nCorso = 0, nDone = 0;
-    (hasClasse ? CLASSE.alunni : []).forEach(function(a){ var st = statoAlunno(a.pin); if(st.on) nColl++; if(st.corso) nCorso++; if(st.done){ nDone++; nColl++; } });
+    (hasClasse ? CLASSE.alunni : []).forEach(function(a){ var st = statoAlunno(a.pin); if(st.on) nColl++; if(st.corso) nCorso++; if(st.done){ nDone++; if(attaccatoAllApp(CLOUD_STUD[a.pin])) nColl++; } });
     var t1 = byId('tile-collegati'), t2 = byId('tile-incorso'), t3 = byId('tile-consegnati');
     if(t1) t1.textContent = nColl; if(t2) t2.textContent = nCorso; if(t3) t3.textContent = nDone;
     var tb = byId('roster-body'); tb.innerHTML = '';
