@@ -881,8 +881,8 @@
   var ULTIMO_CESTINO = 0;
   function cestinoOk(){ var t = Date.now(); if(t - ULTIMO_CESTINO < 500) return false; ULTIMO_CESTINO = t; return true; }
   function esc(s){ return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-  // «Becattini Prof» e' l'alunno dimostrativo del docente: negli elenchi sta sempre in cima.
-  function eProf(x){ var s = x ? ((x.cognome||'') + ' ' + (x.nome||'')) : ''; return /\bbecattini\b/i.test(s) && /\bprof\b/i.test(s); }
+  // «Becattini Mauro» e' l'alunno dimostrativo del docente: negli elenchi sta sempre in cima.
+  function eProf(x){ var s = x ? ((x.cognome||'') + ' ' + (x.nome||'')) : ''; return /\bbecattini\b/i.test(s) && /\bmauro\b/i.test(s); }
   function profInCima(a, b){ return (eProf(b) ? 1 : 0) - (eProf(a) ? 1 : 0); }
   function autogrow(t){ t.style.height='auto'; t.style.height=(t.scrollHeight)+'px'; }
   function isEmpty(v){ return !v || !String(v).trim(); }
