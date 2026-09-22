@@ -1014,7 +1014,20 @@
       return fh < sh * 0.85;
     }catch(e){ return false; }
   }
-  function fuoriAdesso(){ try{ return document.visibilityState === 'hidden' || !document.hasFocus() || finestraRistretta(); }catch(e){ return false; } }
+  /* TENDINE E SELETTORI DEL TELEFONO (22/09/2026). Su telefoni e tablet la tendina dell'IVA, il calendario della
+     data e la tastiera si aprono come finestrelle a parte: la pagina PERDE IL FUOCO pur restando in vista, e senza
+     questa regola il pallino si accenderebbe a un alunno che sta lavorando. Se la pagina e' in vista e il fuoco sta
+     su un campo della fattura, l'alunno e' qui. Solo sui dispositivi a tocco: al computer le tendine non tolgono il
+     fuoco, e il clic su un'altra finestra deve accendere il pallino anche se il cursore era in una casella. */
+  function campoDelTelefono(){
+    try{
+      if(document.visibilityState === 'hidden') return false;
+      if(!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches)) return false;
+      var a = document.activeElement;
+      return !!(a && /^(SELECT|INPUT|TEXTAREA)$/.test(a.tagName));
+    }catch(e){ return false; }
+  }
+  function fuoriAdesso(){ try{ return document.visibilityState === 'hidden' || (!document.hasFocus() && !campoDelTelefono()) || finestraRistretta(); }catch(e){ return false; } }
   function sonoDocente(){
     try{ return sessionStorage.getItem('ff_docente_attivo') === '1'; }catch(e){ return false; }
   }
@@ -2630,7 +2643,7 @@
   /* PALLINO ROSSO (22/09/2026, chiesto da Mauro: «uguale uguale a Cedolino Facile»). Il clic fuori dalla
      finestra (un'altra finestra, un altro programma) non cambia la visibilita' della pagina, quindi lo dicono
      'blur' e 'focus'; la finestra rimpicciolita la dice 'resize'. */
-  try{ window.addEventListener('blur', function(){ battitoSubito(document.visibilityState === 'hidden', true); }); }catch(e){}
+  try{ window.addEventListener('blur', function(){ if(campoDelTelefono()) return; battitoSubito(document.visibilityState === 'hidden', true); }); }catch(e){}
   try{ window.addEventListener('focus', function(){ battitoSubito(document.visibilityState === 'hidden', fuoriAdesso()); }); }catch(e){}
   var RIDIM_TIMER = null, ULTIMO_RISTRETTA = null;
   try{ window.addEventListener('resize', function(){
