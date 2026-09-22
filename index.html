@@ -350,6 +350,9 @@
   tr.riga-assente{ opacity:.5; }
   /* Il cognome è cliccabile (segna assente/presente): al passaggio del mouse GRASSETTO, mai sottolineato. */
   td.nome-cell{ cursor:pointer; }
+  /* PALLINO ROSSO (22/09/2026, come in Cedolino Facile) accanto al nome di chi ha abbassato o lasciato la pagina
+     della fattura mentre lavora: PICCOLO e ROSSO FISSO, niente lampeggio. */
+  .dot-fuori{ display:inline-block; width:8px; height:8px; border-radius:50%; background:#e0261f; margin-left:8px; vertical-align:middle; }
   td.nome-cell:hover{ font-weight:700; }
   tr:hover > td.nome-cell{ background:#f7f8fa; }
   .btn-mini{ border:1px solid var(--line2,#dbe4f2); background:#fff; color:#254a86; border-radius:8px; padding:6px 12px; font-family:inherit; font-size:13px; font-weight:700; cursor:pointer; }
@@ -984,6 +987,34 @@
       }).catch(function(){});
     }catch(e){ return null; }
   }
+  /* PALLINO ROSSO (22/09/2026, come in Cedolino Facile). Mentre l'alunno lavora, la pagina dice al cloud se e'
+     DAVANTI o no: scheda cambiata, finestra abbassata, altra app, schermo spento, clic fuori dalla finestra,
+     finestra rimpicciolita. Lo dice dentro il battito (p_fuori) e, a ogni cambio, subito (rpcSubito). p_seq e'
+     l'ora di questo dispositivo, sempre crescente: il cloud ignora un segnale piu' vecchio dell'ultimo, cosi' un
+     «sono fuori» rimasto per strada non puo' sorpassare il «sono tornato». Solo il pallino: niente blocchi. */
+  var ULTIMO_SEQ = 0;
+  function prossimoSeq(){ var n = Date.now(); if(n <= ULTIMO_SEQ) n = ULTIMO_SEQ + 1; ULTIMO_SEQ = n; return n; }
+  /* FINESTRA RIMPICCIOLITA: la pagina non vede le altre finestre, ma sa quanto e' grande la sua rispetto allo
+     schermo del dispositivo (gia' senza la barra delle applicazioni): sotto il 90% della larghezza o l'85%
+     dell'altezza e' «fuori» (finestra non ingrandita, schermo diviso, finestra mobile del telefono). Sui
+     telefoni l'altezza non conta mentre si scrive in una casella: la tastiera la accorcia. */
+  function finestraRistretta(){
+    try{
+      var sw = screen.availWidth || screen.width, sh = screen.availHeight || screen.height;
+      var fw = window.outerWidth || window.innerWidth, fh = window.outerHeight || window.innerHeight;
+      if(!sw || !sh || !fw || !fh) return false;
+      // iPhone e iPad danno lo schermo sempre in verticale: lo giro se la finestra e' in orizzontale
+      if((window.innerWidth > window.innerHeight) !== (sw > sh)){ var t = sw; sw = sh; sh = t; }
+      if(fw < sw * 0.90) return true;
+      var tocco = false;
+      try{ tocco = window.matchMedia && window.matchMedia('(pointer: coarse)').matches; }catch(e){}
+      var a = document.activeElement;
+      var scrive = !!(a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable));
+      if(tocco && scrive) return false;
+      return fh < sh * 0.85;
+    }catch(e){ return false; }
+  }
+  function fuoriAdesso(){ try{ return document.visibilityState === 'hidden' || !document.hasFocus() || finestraRistretta(); }catch(e){ return false; } }
   function sonoDocente(){
     try{ return sessionStorage.getItem('ff_docente_attivo') === '1'; }catch(e){ return false; }
   }
@@ -1409,7 +1440,8 @@
         p_fattura: (STATE.assegnataId || null),
         p_livello: (typeof LIVELLO !== 'undefined' ? String(LIVELLO) : null),
         p_consegnata: !!STATE.consegnata,
-        p_sfondo: (typeof document !== 'undefined' && document.visibilityState === 'hidden')
+        p_sfondo: (typeof document !== 'undefined' && document.visibilityState === 'hidden'),
+        p_fuori: fuoriAdesso(), p_seq: prossimoSeq()   // il pallino rosso del docente
       }).then(function(res){
         STATE.battitoInVolo = 0;
         // Rete muta = NON SO NULLA: non deduco niente e riprovo al battito dopo.
@@ -2583,22 +2615,40 @@
     }catch(e){}
   }); }catch(e){}
   function riprendiPresenza(){ STATE.salutato = false; if(STATE.studente && STATE.proprietario && !STATE.modalitaCompiti && !STATE.sessioneChiusa && STATE.presenzaTimer) startPresenza(); }
-  function battitoSubito(sfondo){
+  // fuori: true/false = il pallino rosso; se non lo dico, «fuori» vale quanto «sfondo» (pagina nascosta).
+  function battitoSubito(sfondo, fuori){
     if(!(STATE.studente && STATE.proprietario && STATE.presenzaTimer)) return;
     if(STATE.salutato) return;   // ho gia' detto «ho chiuso»: un battito partito dopo il saluto lo sorpasserebbe e resusciterebbe la presenza
     rpcSubito('ff_battito', {
       p_pin: STATE.studente.pin, p_sess: sessMia(), p_dispositivo: idDispositivo(),
       p_fattura: (STATE.assegnataId || null),
       p_livello: (typeof LIVELLO !== 'undefined' ? String(LIVELLO) : null),
-      p_consegnata: !!STATE.consegnata, p_sfondo: !!sfondo
+      p_consegnata: !!STATE.consegnata, p_sfondo: !!sfondo,
+      p_fuori: (fuori === undefined ? !!sfondo : !!fuori), p_seq: prossimoSeq()
     });
   }
+  /* PALLINO ROSSO (22/09/2026, chiesto da Mauro: «uguale uguale a Cedolino Facile»). Il clic fuori dalla
+     finestra (un'altra finestra, un altro programma) non cambia la visibilita' della pagina, quindi lo dicono
+     'blur' e 'focus'; la finestra rimpicciolita la dice 'resize'. */
+  try{ window.addEventListener('blur', function(){ battitoSubito(document.visibilityState === 'hidden', true); }); }catch(e){}
+  try{ window.addEventListener('focus', function(){ battitoSubito(document.visibilityState === 'hidden', fuoriAdesso()); }); }catch(e){}
+  var RIDIM_TIMER = null, ULTIMO_RISTRETTA = null;
+  try{ window.addEventListener('resize', function(){
+    if(RIDIM_TIMER) clearTimeout(RIDIM_TIMER);
+    RIDIM_TIMER = setTimeout(function(){
+      RIDIM_TIMER = null;
+      var r = finestraRistretta();
+      if(r === ULTIMO_RISTRETTA) return;
+      ULTIMO_RISTRETTA = r;
+      battitoSubito(document.visibilityState === 'hidden', fuoriAdesso());
+    }, 400);
+  }); }catch(e){}
   try{ window.addEventListener('pageshow', riprendiPresenza); }catch(e){}
   // Ultimo istante prima che il telefono congeli la pagina, e primo istante dopo il risveglio.
   try{ document.addEventListener('freeze', function(){ battitoSubito(true); }); }catch(e){}
   try{ document.addEventListener('resume', riprendiPresenza); }catch(e){}
   try{ document.addEventListener('visibilitychange', function(){
-    if(document.visibilityState === 'visible'){ riprendiPresenza(); return; }
+    if(document.visibilityState === 'visible'){ riprendiPresenza(); battitoSubito(false, fuoriAdesso()); return; }
     /* (19/09/2026) Prima di tutto il LAVORO: un dispositivo che va in secondo piano puo' essere congelato o ucciso
        senza preavviso. Se c'e' qualcosa di scritto che non e' ancora al sicuro (salvataggio o invio in attesa, o
        per strada), lo salvo adesso e lo spedisco con l'invio che parte anche a pagina congelata. */
@@ -2663,6 +2713,49 @@
         cb && cb();
       }, function(){ cb && cb(); });
     }catch(e){ cb && cb(); }
+  }
+  /* PALLINO ROSSO nella dashboard (22/09/2026, stesse regole di Cedolino Facile). Una lettura leggera al
+     secondo, solo della classe aperta. Acceso finche' l'ULTIMO segnale dell'alunno dice «fuori» e per 3 secondi
+     dopo il rientro (Mauro: «regola ottima», un'uscita lampo ripetuta si fa notare); vale per chi ha un
+     esercizio in corso (non per chi ha consegnato o e' segnato assente) e SOLO SE E' COLLEGATO: su chi e'
+     «Non collegato» il pallino non c'e' mai («e' ovvio che puo' guardare il mondo»). Guardo sia la lettura al
+     secondo (PALLINI) sia quella che scrive «Non collegato» nella riga (CLOUD_STUD): mai insieme sulla stessa riga. */
+  var PALLINI = {};
+  var PALLINO_CODA_MS = 3000;
+  var PALLINO_STATI = { in_corso:true, da_consegnare:true, bloccato:true };
+  function pallinoAcceso(pin){
+    var g = PALLINI[pin]; if(!g) return false;
+    var st = statoAlunno(pin);
+    if(st.done || st.assente || !PALLINO_STATI[g.stato || '']) return false;
+    if(!attaccatoAllApp(g) || !attaccatoAllApp(CLOUD_STUD[pin])) return false;
+    if(g.fuori) return true;
+    if(!g.rientrato_il) return false;
+    return (Date.now() + SCARTO_ORA_CLOUD - new Date(g.rientrato_il).getTime()) < PALLINO_CODA_MS;
+  }
+  function disegnaPallini(){
+    var righe = document.querySelectorAll('#roster-body tr[data-pin]');
+    Array.prototype.forEach.call(righe, function(tr){
+      var cella = tr.querySelector('.nome-cell'); if(!cella) return;
+      var dot = cella.querySelector('.dot-fuori');
+      var acceso = pallinoAcceso(tr.getAttribute('data-pin'));
+      if(acceso && !dot){
+        dot = document.createElement('span'); dot.className = 'dot-fuori';
+        dot.title = 'Ha abbassato o lasciato la pagina della fattura';
+        cella.appendChild(dot);
+      } else if(!acceso && dot){ cella.removeChild(dot); }
+    });
+  }
+  function refreshPallini(){
+    if(!SB || !(typeof CLASSE !== 'undefined' && CLASSE && CLASSE.classe)){ disegnaPallini(); return; }
+    if(STATE.pallinoInVolo && (Date.now() - STATE.pallinoInVolo) < 4000){ disegnaPallini(); return; }
+    STATE.pallinoInVolo = Date.now();
+    try{
+      SB.from('fatt_studenti').select('pin,ultimo_accesso,fuori,rientrato_il,stato').eq('classe', CLASSE.classe).then(function(res){
+        STATE.pallinoInVolo = 0;
+        if(res && !res.error && res.data){ PALLINI = {}; res.data.forEach(function(r){ PALLINI[r.pin] = r; }); }
+        disegnaPallini();
+      }, function(){ STATE.pallinoInVolo = 0; });
+    }catch(e){ STATE.pallinoInVolo = 0; }
   }
   function cloudAssegnaStudente(pin, fatturaId, liv){
     if(SB){ try{ SB.from('fatt_studenti').update({ fattura_assegnata:(fatturaId||null), livello_assegnato:(liv!=null?String(liv):null) }).eq('pin', pin).then(function(){}, function(){}); }catch(e){} }
@@ -2806,6 +2899,7 @@
     // il refresh periodico aggiorna SOLO stato e conteggi: non ricostruisce le tendine
     allineaOraCloud(); STATE.giriDashboard = 0;
     STATE.collegatiTimer = setInterval(function(){ if((++STATE.giriDashboard % 75) === 0) allineaOraCloud(); cloudDocenteHeartbeat(); refreshCloudStud(function(){ refreshConsegne(refreshStati); }); }, 4000);
+    STATE.pallinoTimer = setInterval(refreshPallini, 1000);   // il pallino rosso: lettura leggera, una al secondo
   }
   function cloudLoginPin(pin, cb, tentativo){
     if(!SB){ cb && cb(null, 'rete'); return; }
@@ -2985,7 +3079,7 @@
     });
     document.body.appendChild(ov);
   }
-  function stopCollegatiTimer(){ if(STATE.collegatiTimer){ clearInterval(STATE.collegatiTimer); STATE.collegatiTimer = null; } }
+  function stopCollegatiTimer(){ if(STATE.collegatiTimer){ clearInterval(STATE.collegatiTimer); STATE.collegatiTimer = null; } if(STATE.pallinoTimer){ clearInterval(STATE.pallinoTimer); STATE.pallinoTimer = null; } }
   /* =============================================================== */
   /* Quando true (livello Manuale) la tendina della rubrica NON compare: l'alunno digita a mano. */
   var ANA_SEARCH_OFF = false;
@@ -4204,6 +4298,7 @@
       tr.appendChild(tdN); tr.appendChild(tdNome); tr.appendChild(tdPin); tr.appendChild(tdAss); tr.appendChild(tdSt); tr.appendChild(tdAz); tr.appendChild(buildVotoCell(a)); tr.appendChild(buildValutaCell(a));
       tb.appendChild(tr);
     });
+    disegnaPallini();   // la tabella ridisegnata riparte senza pallini: li rimetto subito
   }
 
   /* ---------- Alunno ---------- */
