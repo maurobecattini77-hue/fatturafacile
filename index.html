@@ -1061,7 +1061,9 @@
     // voto/verifica non resta appiccicato dopo un Reset. È l'atto con cui riparte una nuova verifica.
     // Azzero anche «assente»: l'appello è di OGGI. Se restasse appiccicato, l'assente della settimana scorsa
     // resterebbe chiuso fuori dalla verifica nuova senza che il docente lo sappia — un danno muto, il peggiore.
-    var rows = j.alunni.map(function(a){ return { pin:a.pin, nome:a.nome, cognome:a.cognome, classe:j.classe||'', ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false, valutazione:null, valutazione_snapshot:null, assente:false }; });
+    // (23/09/2026) Tutto da capo vale anche per le bozze e per i dispositivi: stesso contrassegno del Reset.
+    var azz = nuovoAzzeramento();
+    var rows = j.alunni.map(function(a){ return { pin:a.pin, nome:a.nome, cognome:a.cognome, classe:j.classe||'', ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false, valutazione:null, valutazione_snapshot:null, assente:false, bozza_corrente:null, azzeramento:azz, dispositivo:null, ultima_attivita:null }; });
     try{
       SB.from('fatt_studenti').upsert(rows, { onConflict:'pin' }).then(function(res){
         if(!res || res.error){ if(cb) cb(false, (res && res.error && res.error.message) || 'nessuna risposta'); return; }
@@ -1470,6 +1472,9 @@
         STATE.rifiutiBattito = 0;
         var riga = res.data;
         if(!STATE.studente || STATE.modalitaCompiti) return;
+        // (23/09/2026) Il docente ha fatto Reset (o ha ricaricato la classe) mentre questo dispositivo era dentro:
+        // il contrassegno e' cambiato. Mi chiudo subito, SENZA rimettere su il lavoro, e si rientra col PIN.
+        if(typeof riga.azzeramento === 'string' && typeof STATE.azzVisto === 'string' && riga.azzeramento !== STATE.azzVisto){ terminaSessioneVerifica(true); return; }
         // La riga che torna col battito fa da sorvegliante unico: consegna forzata, gettone, assegnazione.
         if(STATE.consegnaWatch){ try{ applicaConsegnaWatcher(riga); }catch(e){} }
         if(STATE.sessWatch){ try{ applicaSessioneWatcher(riga); }catch(e){} }
@@ -1503,9 +1508,15 @@
   // NB: il Reset NON tocca valutazione/valutazione_snapshot: manda la classe in COMPITI A CASA, ed è proprio lì
   // che gli alunni entrano a vedere il VOTO PUBBLICATO (lo snapshot esiste apposta per sopravvivere al Reset che
   // cancella le consegne). I voti si azzerano SOLO ricaricando la classe (Carica classe = nuova verifica).
+  // (23/09/2026) PIAZZA PULITA ANCHE NEI DISPOSITIVI (come in Cedolino Facile). Il Reset puliva il cloud, ma il
+  // dispositivo dell'alunno teneva la sua copia del foglio e al rientro la rimetteva su. Ora il Reset lascia un
+  // CONTRASSEGNO nuovo (azzeramento): ogni dispositivo che lo trova cambiato butta il lavoro di prima, e la porta
+  // della bozza rifiuta chi scrive col contrassegno vecchio. Via anche dispositivo e ultima attivita': dopo il
+  // Reset si rientra solo col PIN (niente rientro automatico entro mezz'ora).
+  function nuovoAzzeramento(){ return new Date().toISOString() + '-' + Math.random().toString(36).slice(2, 8); }
   function cloudResetClasse(classe){
     if(!SB || !classe) return;
-    try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false, bozza_corrente:null }).eq('classe', classe).then(function(){}, function(){}); }catch(e){}
+    try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false, bozza_corrente:null, azzeramento:nuovoAzzeramento(), dispositivo:null, ultima_attivita:null }).eq('classe', classe).then(function(){}, function(){}); }catch(e){}
     try{ SB.from('fatt_tentativi').delete().eq('classe', classe).neq('modalita', 'compiti').then(function(){}, function(){}); }catch(e){}
     (CLASSE && CLASSE.alunni ? CLASSE.alunni : []).forEach(function(a){
       if(CLOUD_STUD[a.pin]){ var s = CLOUD_STUD[a.pin]; s.stato='non_iniziato'; s.consegnata=false; s.riammesso=false; s.ultimo_accesso=null; s.fattura_assegnata=null; s.livello_assegnato=null; s.fattura_corrente=null; }
@@ -1692,18 +1703,26 @@
   // una verifica nuova). La chiamano tre situazioni diverse: il docente ha RESETTATO, ha SOSPESO la verifica,
   // o ha segnato QUESTO alunno assente. In tutti e tre i casi il lavoro resta salvo nel cloud: qui si spengono
   // solo i timer e la presenza (così al rientro non scatta il blocco anti-doppio-accesso).
-  function terminaSessioneVerifica(){
+  // (23/09/2026) perReset = true: il docente ha fatto Reset o ricaricato la classe. Allora il lavoro NON si mette
+  // al sicuro (e' proprio quello che il docente ha cancellato): lo butto da questo dispositivo, non lo rimando al
+  // cloud, e l'alunno torna alla schermata del PIN (niente rientro automatico). Sospendi e Assente restano come prima.
+  function terminaSessioneVerifica(perReset){
     if(STATE.sessioneChiusa) return;      // una volta sola
-    mettiAlSicuroLavoro();                // gli ultimi tasti prima di tutto, finche' so ancora di chi e' il foglio
+    if(!perReset) mettiAlSicuroLavoro();  // gli ultimi tasti prima di tutto, finche' so ancora di chi e' il foglio
     STATE.sessioneChiusa = true;
     var pin = STATE.studente ? STATE.studente.pin : '';
     stopSessioneWatcher();
     stopAssegnazioneWatcher(); stopConsegnaWatcher(); stopBloccoWatcher(); stopAttesaWatcher();
     stopPresenza();                       // niente più battiti: non può più resuscitare
     if(pin) cloudClearPresenza(pin);      // e cancello subito quello già scritto
+    if(perReset && pin){
+      buttaLavoroAzzerato(pin);
+      STATE.bozzaLetta = false;           // nessun invio della bozza parte piu' da questa sessione
+      try{ localStorage.removeItem('ff_ultimo_pin'); sessionStorage.removeItem('ff_studente_attivo'); }catch(e){}
+    }
     STATE.mieAssegnate = []; STATE.assegnataId = null; STATE.multiMode = false; STATE.consegnata = false;
     byId('topbar-info').innerHTML = '';   // via i comandi della verifica ormai finita
-    if(!pin){ goGate(); return; }
+    if(!pin || perReset){ goGate(); return; }
     // Niente schermate inutili: dopo il Reset la classe passa ai COMPITI A CASA, quindi l'alunno ci finisce
     // dentro direttamente (ed è anche dove trova il voto, se il docente l'ha pubblicato). Se invece il docente
     // ha solo ricaricato la classe (nuova verifica in arrivo), torna al PIN: rientrerà quando glielo dice lui.
@@ -1755,7 +1774,7 @@
     // 'bloccato' mentre lavoro = qualcuno ha bussato col mio PIN mentre non davo segnali. Io NON mi fermo:
     // il mio battito ha gia' rimesso 'in_corso' sul server.
     if(!STATE.sessArmed){ if(st !== 'non_iniziato') STATE.sessArmed = true; return; }
-    if(st === 'non_iniziato' && !s.fattura_assegnata) terminaSessioneVerifica();
+    if(st === 'non_iniziato' && !s.fattura_assegnata) terminaSessioneVerifica(true);   // = Reset o classe ricaricata
   }
   /* ---------- Sorvegliante del CAMBIO ASSEGNAZIONE in tempo reale (lato alunno) ---------- */
   function assegnazioniUguali(a, b){
@@ -1804,6 +1823,8 @@
         //     l'alunno veniva sbattuto fuori dalla verifica e riversato nei compiti a casa, la sua presenza
         //     cancellata, e la «Consegna classe» lo saltava perché ormai risultava «Non collegato».
         if(!ctx || ctx.errore){ STATE.resetConferme = 0; return; }
+        // (23/09/2026) Il contrassegno del Reset e' cambiato: e' un Reset certo, non serve la doppia conferma.
+        if(ctx.azzCambiato){ terminaSessioneVerifica(true); return; }
         // (0-bis) Il docente ha SOSPESO la verifica (o ha segnato assente proprio lui): la verifica si chiude
         //     qui, adesso. Il lavoro resta salvo nel cloud e l'alunno atterra sui compiti, dove può allenarsi
         //     quanto vuole finché il docente non preme «Riprendi». Nessuna consegna, nessuna forzatura.
@@ -1826,7 +1847,7 @@
         if(!nuova.length){
           if((STATE.mieAssegnate || []).length){
             STATE.resetConferme = (STATE.resetConferme || 0) + 1;
-            if(STATE.resetConferme >= 2) terminaSessioneVerifica();
+            if(STATE.resetConferme >= 2) terminaSessioneVerifica(true);
           }
           return;
         }
@@ -2805,6 +2826,8 @@
         var per = r1.data;
         out.stato = per.stato || null; out.consegnata = !!per.consegnata; out.riammesso = !!per.riammesso;
         out.classe = per.classe || null;
+        out.azzeramento = (typeof per.azzeramento === 'string') ? per.azzeramento : undefined;
+        out.azzCambiato = allineaAzzeramento(pin, out.azzeramento);   // Reset avvenuto da quando questo dispositivo ha guardato l'ultima volta
         if(per.fattura_assegnata){ out.fattura = assegnPrimoId(per.fattura_assegnata); out.livello = assegnPrimoLiv(per.fattura_assegnata) || per.livello_assegnato || null; out.lista = parseAssegnazione(per.fattura_assegnata); }
         // chiusa = il docente ha sospeso la verifica della sua classe, o l'ha segnato assente
         out.chiusa = !!(per.assente || per.sospesa);
@@ -2831,6 +2854,7 @@
         // compiti a casa NEL MEZZO DI UNA VERIFICA).
         if(!r1 || r1.error || !r1.data){ cb && cb(null); return; }
         var per = r1.data;
+        allineaAzzeramento(pin, per.azzeramento);                   // prima di aprire qualsiasi foglio: via il lavoro azzerato
         if(per.sospesa){ cb && cb('compiti'); return; }            // VERIFICA SOSPESA dal docente → compiti (l'assegnazione resta, ma è chiusa a chiave)
         if(per.compiti){ cb && cb('compiti'); return; }            // classe messa in modalità compiti dal Reset → compiti SEMPRE
         if(per.assente){ cb && cb('compiti'); return; }            // segnato ASSENTE dal docente → vede i compiti, senza nessun messaggio strano
@@ -4398,6 +4422,9 @@
     // schermata di blocco). Da questo momento questo dispositivo è il PROPRIETARIO della sessione: è l'unico
     // autorizzato a scrivere e cancellare la presenza di questo PIN.
     STATE.proprietario = true;
+    // Il contrassegno del Reset valido per questa sessione (vedi allineaAzzeramento e ff_bozza_salva).
+    if(ctx && typeof ctx.azzeramento === 'string') STATE.azzVisto = ctx.azzeramento;
+    else { STATE.azzVisto = null; try{ if(pin) STATE.azzVisto = localStorage.getItem('ff_azz_' + pin); }catch(e){} }
     STATE.modalitaCompiti = false; STATE.esercitazione = false;   // entrata in VERIFICA: la chiave del lavoro locale dev'essere quella verifica, non compiti
     // GETTONE DI SESSIONE: questo dispositivo genera un codice unico e lo "pianta" nel cloud (colonna sessione).
     // L'ULTIMO che entra vince. Se dopo uno «Sblocca» un altro dispositivo entra e pianta il SUO gettone, il
@@ -4834,6 +4861,41 @@
   // Allenamento (esercitazione libera dopo la consegna): binario locale a sé ('E'), così NON tocca né la verifica
   // ('') né il compito già consegnato ('C'). Resta sullo stesso dispositivo, non finisce mai nel cloud.
   function chiaveLavoro(pin, id){ return 'ff_lavoro' + (STATE.esercitazione ? 'E' : (STATE.modalitaCompiti ? 'C' : '')) + '_' + pin + '_' + id; }
+  // (23/09/2026) Butta da QUESTO dispositivo il lavoro azzerato dal docente (Reset o Carica classe): le copie del
+  // foglio di verifica e dell'allenamento, gli elenchi delle consegnate e delle iniziate e, se e' l'alunno di
+  // questa pagina, la bozza in memoria coi salvataggi in partenza. I compiti a casa (ff_lavoroC_) restano.
+  function buttaLavoroAzzerato(pin){
+    if(!pin) return;
+    try{
+      localStorage.removeItem('ff_consegnate_' + pin); localStorage.removeItem('ff_iniziate_' + pin);
+      var rm = [];
+      for(var i = 0; i < localStorage.length; i++){
+        var k = localStorage.key(i);
+        if(k && (k.indexOf('ff_lavoro_' + pin + '_') === 0 || k.indexOf('ff_lavoroE_' + pin + '_') === 0)) rm.push(k);
+      }
+      rm.forEach(function(k){ localStorage.removeItem(k); });
+    }catch(e){}
+    if(STATE.studente && STATE.studente.pin === pin && !STATE.modalitaCompiti){
+      if(STATE.saveTimer){ clearTimeout(STATE.saveTimer); STATE.saveTimer = null; }
+      if(STATE.bozzaCloudTimer){ clearTimeout(STATE.bozzaCloudTimer); STATE.bozzaCloudTimer = null; }
+      if(STATE.bozzaRiprovaTimer){ clearTimeout(STATE.bozzaRiprovaTimer); STATE.bozzaRiprovaTimer = null; }
+      STATE.bozzaMappa = {}; STATE.bozzaDaRimandare = false;
+    }
+  }
+  // Confronta il contrassegno del cloud con l'ultimo che QUESTO dispositivo ha visto per quel PIN. Se e' cambiato
+  // (c'e' stato un Reset da allora, magari a telefono spento) butta il lavoro vecchio prima che il foglio si apra.
+  // true = era cambiato. tok non stringa = il cloud non l'ha detto (pagina o porta vecchia): non faccio niente.
+  function allineaAzzeramento(pin, tok){
+    if(!pin || typeof tok !== 'string') return false;
+    var visto = null; try{ visto = localStorage.getItem('ff_azz_' + pin); }catch(e){}
+    if(visto === tok) return false;
+    var cambiato = (visto !== null || tok !== '');
+    if(cambiato) buttaLavoroAzzerato(pin);
+    try{ localStorage.setItem('ff_azz_' + pin, tok); }catch(e){}
+    return cambiato;
+  }
+  // Il contrassegno che questo alunno conosceva entrando: viaggia con la bozza, e la porta la rifiuta se e' superato.
+  function azzMio(){ return (typeof STATE.azzVisto === 'string') ? STATE.azzVisto : null; }
   function pushBozzaCloud(){
     if(!SB || !STATE.studente || !STATE.proprietario || STATE.modalitaCompiti) return;
     if(!STATE.bozzaLetta) return;   // non so ancora cosa c'e' nel cloud: scrivere ora cancellerebbe le altre bozze
@@ -4851,7 +4913,7 @@
       STATE.bozzaRiprovaTimer = setTimeout(function(){ STATE.bozzaRiprovaTimer = null; pushBozzaCloud(); }, 4000);
     };
     try{
-      SB.rpc('ff_bozza_salva', { p_pin: pinB, p_sess: sessMia(), p_dispositivo: idDispositivo(), p_bozza: (STATE.bozzaMappa || {}) })
+      SB.rpc('ff_bozza_salva', { p_pin: pinB, p_sess: sessMia(), p_dispositivo: idDispositivo(), p_bozza: (STATE.bozzaMappa || {}), p_azz: azzMio() })
         .then(function(res){
           STATE.bozzaInVolo = 0;
           if(!res || res.error || res.data === false){ riprova(); return; }
@@ -4866,7 +4928,7 @@
   function pushBozzaSubito(){
     try{
       if(!SB || !STATE.studente || !STATE.proprietario || STATE.modalitaCompiti || !STATE.bozzaLetta) return;
-      var corpo = { p_pin: STATE.studente.pin, p_sess: sessMia(), p_dispositivo: idDispositivo(), p_bozza: (STATE.bozzaMappa || {}) };
+      var corpo = { p_pin: STATE.studente.pin, p_sess: sessMia(), p_dispositivo: idDispositivo(), p_bozza: (STATE.bozzaMappa || {}), p_azz: azzMio() };
       if(JSON.stringify(corpo).length < 55000) rpcSubito('ff_bozza_salva', corpo);
       else { STATE.bozzaInVolo = 0; pushBozzaCloud(); }
     }catch(e){}
@@ -6009,11 +6071,7 @@
         STATE.assegnate = []; STATE.assegnataId = null;
         try{
           localStorage.removeItem('ff_assegnata'); localStorage.removeItem('ff_livello'); sessionStorage.removeItem('ff_studente_attivo');
-          (CLASSE && CLASSE.alunni ? CLASSE.alunni : []).forEach(function(a){
-            localStorage.removeItem('ff_consegnate_' + a.pin); localStorage.removeItem('ff_iniziate_' + a.pin);
-            var rm = []; for(var i = 0; i < localStorage.length; i++){ var k = localStorage.key(i); if(k && k.indexOf('ff_lavoro_' + a.pin + '_') === 0) rm.push(k); }
-            rm.forEach(function(k){ localStorage.removeItem(k); });
-          });
+          (CLASSE && CLASSE.alunni ? CLASSE.alunni : []).forEach(function(a){ buttaLavoroAzzerato(a.pin); });
         }catch(e){}
         renderDocente();
         showAlert('Classe ' + cl + ' resettata. Le verifiche consegnate ora vivono SOLO nel file di backup che hai salvato: tienilo da parte finché non hai messo i voti. La classe è passata ai COMPITI A CASA. Per rifarci una verifica, ricaricala con «Carica classe».');
@@ -6203,6 +6261,7 @@
         }, function(){ goGate(); });
       } else { goGate(); }
     } else if(attivo){
+      rientroSeNonAzzerato(attivo, function(){
       var alu = (CLASSE && CLASSE.alunni) ? CLASSE.alunni.find(function(a){ return a.pin === attivo; }) : null;
       // Dopo un F5 rientra passando dal contesto (menù se più fatture, singola se una sola).
       if(alu){ STATE.studente = alu; buildRubrica(); ripristinaAlunno(alu.pin); }
@@ -6213,8 +6272,26 @@
           else { goGate(); }
         });
       }
+      });
     } else { provaRientroAutomatico(); }
   }catch(e){ goGate(); }
+  /* (23/09/2026) DOPO IL RESET CI VUOLE IL PIN. I rientri senza PIN (F5 nella stessa scheda, riapertura entro
+     mezz'ora) prima guardano se da allora il docente ha fatto Reset o ricaricato la classe: se si', il lavoro
+     vecchio e' gia' stato buttato da allineaAzzeramento e si torna alla schermata del PIN. Rete muta = si
+     prosegue come prima (non so niente, non blocco nessuno). */
+  function rientroSeNonAzzerato(pin, avanti){
+    if(!SB || !pin){ avanti(); return; }
+    try{
+      SB.rpc('ff_stato', { p_pin: pin }).then(function(r){
+        var d = (r && !r.error) ? r.data : null;
+        if(d && allineaAzzeramento(pin, d.azzeramento)){
+          try{ sessionStorage.removeItem('ff_studente_attivo'); sessionStorage.removeItem('ff_sess'); localStorage.removeItem('ff_ultimo_pin'); }catch(e){}
+          STATE.studente = null; goGate(); return;
+        }
+        avanti();
+      }, function(){ avanti(); });
+    }catch(e){ avanti(); }
+  }
   /* Se riapre l'app dallo STESSO dispositivo entro mezz'ora, rientra da solo, senza ridigitare il PIN, e ritrova
      il lavoro dov'era (come in Cedolino Facile). Se nel frattempo il posto e' stato preso da un altro
      dispositivo, o e' passata piu' di mezz'ora, o aveva premuto «Esci», si torna alla schermata del PIN.
@@ -6223,6 +6300,7 @@
     var pinR = null;
     try{ pinR = localStorage.getItem('ff_ultimo_pin'); }catch(e){}
     if(!pinR || !SB){ goGate(); return; }
+    rientroSeNonAzzerato(pinR, function(){
     try{
       SB.rpc('ff_rientro', { p_pin: pinR, p_dispositivo: idDispositivo() }).then(function(r){
         var d = (r && !r.error) ? r.data : null;
@@ -6240,6 +6318,7 @@
         });
       }, function(){ goGate(); });
     }catch(e){ goGate(); }
+    });
   }
   /* Controllo silenzioso del collegamento, SOLO sulla schermata del PIN: serve a scoprire i dispositivi senza
      linea PRIMA della verifica. Se il cloud risponde, l'alunno non vede niente. */
