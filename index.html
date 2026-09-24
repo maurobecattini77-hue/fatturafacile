@@ -998,8 +998,19 @@
      schermo del dispositivo (gia' senza la barra delle applicazioni): sotto il 90% della larghezza o l'85%
      dell'altezza e' «fuori» (finestra non ingrandita, schermo diviso, finestra mobile del telefono). Sui
      telefoni l'altezza non conta mentre si scrive in una casella: la tastiera la accorcia. */
+  /* IPHONE: CONTA SOLO LA PAGINA NASCOSTA (24/09/2026). In 4G, sulla dashboard verifiche (e lo stesso in Cedolino Facile), tre alunni con
+     l'iPhone avevano il pallino acceso fisso pur rispondendo alle domande (le risposte arrivavano, il battito ogni
+     5 secondi pure): su certi iPhone, soprattutto con il link aperto da Classroom dentro il suo visore, la pagina
+     risulta senza fuoco o piu' bassa dello schermo anche quando e' davanti. Sull'iPhone pero' due app insieme non
+     si possono tenere (niente schermo diviso, niente finestre mobili): se l'alunno va altrove la pagina diventa
+     NASCOSTA, sempre. Quindi sull'iPhone «fuori» = pagina nascosta, e basta. L'iPad (schermo diviso) e gli
+     Android restano con tutti i controlli. */
+  function iPhoneSoloSchermo(){
+    try{ return /iPhone|iPod/.test(navigator.userAgent || ''); }catch(e){ return false; }
+  }
   function finestraRistretta(){
     try{
+      if(iPhoneSoloSchermo()) return false;
       var sw = screen.availWidth || screen.width, sh = screen.availHeight || screen.height;
       var fw = window.outerWidth || window.innerWidth, fh = window.outerHeight || window.innerHeight;
       if(!sw || !sh || !fw || !fh) return false;
@@ -1027,7 +1038,7 @@
       return !!(a && /^(SELECT|INPUT|TEXTAREA)$/.test(a.tagName));
     }catch(e){ return false; }
   }
-  function fuoriAdesso(){ try{ return document.visibilityState === 'hidden' || (!document.hasFocus() && !campoDelTelefono()) || finestraRistretta(); }catch(e){ return false; } }
+  function fuoriAdesso(){ try{ if(iPhoneSoloSchermo()) return document.visibilityState === 'hidden'; return document.visibilityState === 'hidden' || (!document.hasFocus() && !campoDelTelefono()) || finestraRistretta(); }catch(e){ return false; } }
   function sonoDocente(){
     try{ return sessionStorage.getItem('ff_docente_attivo') === '1'; }catch(e){ return false; }
   }
@@ -2664,7 +2675,7 @@
   /* PALLINO ROSSO (22/09/2026, chiesto da Mauro: «uguale uguale a Cedolino Facile»). Il clic fuori dalla
      finestra (un'altra finestra, un altro programma) non cambia la visibilita' della pagina, quindi lo dicono
      'blur' e 'focus'; la finestra rimpicciolita la dice 'resize'. */
-  try{ window.addEventListener('blur', function(){ if(campoDelTelefono()) return; battitoSubito(document.visibilityState === 'hidden', true); }); }catch(e){}
+  try{ window.addEventListener('blur', function(){ if(campoDelTelefono() || (iPhoneSoloSchermo() && document.visibilityState !== 'hidden')) return; battitoSubito(document.visibilityState === 'hidden', true); }); }catch(e){}
   try{ window.addEventListener('focus', function(){ battitoSubito(document.visibilityState === 'hidden', fuoriAdesso()); }); }catch(e){}
   var RIDIM_TIMER = null, ULTIMO_RISTRETTA = null;
   try{ window.addEventListener('resize', function(){
