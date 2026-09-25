@@ -1074,7 +1074,7 @@
     // resterebbe chiuso fuori dalla verifica nuova senza che il docente lo sappia — un danno muto, il peggiore.
     // (23/09/2026) Tutto da capo vale anche per le bozze e per i dispositivi: stesso contrassegno del Reset.
     var azz = nuovoAzzeramento();
-    var rows = j.alunni.map(function(a){ return { pin:a.pin, nome:a.nome, cognome:a.cognome, classe:j.classe||'', ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false, valutazione:null, valutazione_snapshot:null, assente:false, bozza_corrente:null, azzeramento:azz, dispositivo:null, ultima_attivita:null }; });
+    var rows = j.alunni.map(function(a){ return { pin:a.pin, nome:a.nome, cognome:a.cognome, classe:j.classe||'', ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false, valutazione:null, valutazione_snapshot:null, assente:false, motivo_assenza:null, bozza_corrente:null, azzeramento:azz, dispositivo:null, ultima_attivita:null }; });
     try{
       SB.from('fatt_studenti').upsert(rows, { onConflict:'pin' }).then(function(res){
         if(!res || res.error){ if(cb) cb(false, (res && res.error && res.error.message) || 'nessuna risposta'); return; }
@@ -1278,7 +1278,7 @@
     stopConsegnaWatcher();
     stopPresenza();
     try{ sessionStorage.removeItem('ff_studente_attivo'); }catch(e){}
-    mostraBloccoMsg('✅', 'Verifica consegnata', 'Il docente ha consegnato la tua verifica. Se ti riammette, potrai rientrare.', '#2f7d54');
+    mostraConsegnatoAlunno(null, 'Il docente ha consegnato il tuo lavoro. Se ti riammette, potrai rientrare.');   // titolo giusto: verifica o esercitazione (24/09/2026)
     startBloccoWatcher();
   }
   // Consegna forzata ESEGUITA SUL DISPOSITIVO DELL'ALUNNO: consegna DAVVERO il lavoro reale di tutte le sue
@@ -1300,6 +1300,7 @@
                   ? STATE.mieAssegnate.slice()
                   : (STATE.assegnataId ? [{ id:STATE.assegnataId, liv:(typeof LIVELLO!=='undefined'?LIVELLO:2) }] : []);
     var done = consegnateLocali(pin);
+    STATE.forzataLocale = true;   // le catture qui sotto partono subito: sono consegne del DOCENTE, non dell'alunno
     lista.forEach(function(x){
       if(done.indexOf(x.id) !== -1) return;                                  // già consegnata davvero
       var raw = null; try{ raw = localStorage.getItem(chiaveLavoro(pin, x.id)); }catch(e){}
@@ -1310,10 +1311,11 @@
       if(!raw && !haBozza) return;                                           // mai aperta/nessun lavoro → la marca il docente
       try{ catturaFatturaPerForzata(x); }catch(e){}
     });
+    STATE.forzataLocale = false;
     try{ SB.rpc('ff_segna_consegnato', { p_pin: pin, p_sess: sessMia(), p_dispositivo: idDispositivo() }).then(function(){}, function(){}); }catch(e){}
     stopPresenza();
     try{ sessionStorage.removeItem('ff_studente_attivo'); }catch(e){}
-    mostraBloccoMsg('✅', 'Verifica consegnata', 'Il docente ha consegnato la tua verifica. Se ti riammette, potrai rientrare.', '#2f7d54');
+    mostraConsegnatoAlunno(null, 'Il docente ha consegnato il tuo lavoro. Se ti riammette, potrai rientrare.');   // titolo giusto: verifica o esercitazione (24/09/2026)
     startBloccoWatcher();
   }
   // Carica una fattura col suo lavoro salvato e la consegna nel cloud senza interazione (riusa il caricamento
@@ -1378,7 +1380,9 @@
         // Rete muta = NON SO NULLA: tengo i segni che ho. Prima un buco di rete li cancellava, e una fattura
         // gia' consegnata tornava «Compila» (19/09/2026).
         if(!res || res.error || !Array.isArray(res.data)){ cb && cb(); return; }
-        if(res && res.data) res = { data: res.data.filter(function(t){ return t.completato && t.modalita !== 'compiti'; }) };
+        // (25/09/2026, come Cedolino) contano anche i compiti: una fattura consegnata a casa, se il docente la assegna
+        // in classe, l'alunno la trova consegnata (vede il suo foglio, e per rifarla c'e' «Allenati»).
+        if(res && res.data) res = { data: res.data.filter(function(t){ return t.completato; }) };
         var ids = {};
         ((res && res.data) || []).forEach(function(t){ if(t.fattura_id && t.modalita !== 'forzata') ids[t.fattura_id] = true; });
         try{ localStorage.setItem('ff_consegnate_' + pin, JSON.stringify(Object.keys(ids))); }catch(e){}
@@ -1525,14 +1529,22 @@
   // della bozza rifiuta chi scrive col contrassegno vecchio. Via anche dispositivo e ultima attivita': dopo il
   // Reset si rientra solo col PIN (niente rientro automatico entro mezz'ora).
   function nuovoAzzeramento(){ return new Date().toISOString() + '-' + Math.random().toString(36).slice(2, 8); }
-  function cloudResetClasse(classe){
-    if(!SB || !classe) return;
-    try{ SB.from('fatt_studenti').update({ ultimo_accesso:null, fattura_corrente:null, livello_corrente:null, fattura_assegnata:null, livello_assegnato:null, consegnata:false, stato:'non_iniziato', riammesso:false, bozza_corrente:null, azzeramento:nuovoAzzeramento(), dispositivo:null, ultima_attivita:null }).eq('classe', classe).then(function(){}, function(){}); }catch(e){}
-    try{ SB.from('fatt_tentativi').delete().eq('classe', classe).neq('modalita', 'compiti').then(function(){}, function(){}); }catch(e){}
-    (CLASSE && CLASSE.alunni ? CLASSE.alunni : []).forEach(function(a){
-      if(CLOUD_STUD[a.pin]){ var s = CLOUD_STUD[a.pin]; s.stato='non_iniziato'; s.consegnata=false; s.riammesso=false; s.ultimo_accesso=null; s.fattura_assegnata=null; s.livello_assegnato=null; s.fattura_corrente=null; }
-      CLOUD_CONS[a.pin] = {};
-    });
+  // (25/09/2026, regole nuove come Cedolino) Il Reset chiude la PROVA e lascia nel quaderno di ogni alunno il lavoro
+  // degli ESERCIZI: chi ha consegnato lui trova «Svolto in classe · consegnato», gli altri «Svolto in classe · da
+  // consegnare» col loro lavoro dentro. Le VERIFICHE spariscono (sono nel backup), restano i voti. Tutti tornano
+  // presenti. La classe resta in dashboard. Lo fa tutto la porta ff_reset_classe sul server, in un colpo solo.
+  function cloudResetClasse(classe, cb){
+    if(!SB || !classe){ cb && cb(false, 'cloud non disponibile'); return; }
+    try{
+      SB.rpc('ff_reset_classe', { p_classe: classe, p_azz: nuovoAzzeramento() }).then(function(res){
+        if(!res || res.error || !res.data || !res.data.ok){ cb && cb(false, (res && res.error && res.error.message) || 'il cloud non ha confermato'); return; }
+        (CLASSE && CLASSE.alunni ? CLASSE.alunni : []).forEach(function(a){
+          if(CLOUD_STUD[a.pin]){ var s = CLOUD_STUD[a.pin]; s.stato='non_iniziato'; s.consegnata=false; s.riammesso=false; s.ultimo_accesso=null; s.fattura_assegnata=null; s.livello_assegnato=null; s.fattura_corrente=null; s.assente=false; s.motivo_assenza=null; }
+          CLOUD_CONS[a.pin] = {};
+        });
+        cb && cb(true, res.data);
+      }, function(){ cb && cb(false, 'il cloud non ha risposto'); });
+    }catch(e){ cb && cb(false, 'errore imprevisto'); }
   }
   // Marca/smarca una CLASSE come "modalità compiti a casa" (lista in fatt_config.compiti_classi).
   // Una classe in compiti: (a) i suoi alunni fanno i compiti anche col docente collegato; (b) è NASCOSTA
@@ -1600,13 +1612,13 @@
   // i COMPITI, senza nessun messaggio — così da casa non scopre nemmeno che c'è una verifica in corso.
   // Serve perché guardare chi è collegato non basta: uno entra, sbircia le fatture, fotografa e chiude.
   // cb(ok, err): come per la sospensione, nessun annuncio senza la conferma del cloud.
-  function cloudSetAssente(pin, on, cb){
+  function cloudSetAssente(pin, on, cb, motivo){
     if(!SB){ cb && cb(false, 'nessun collegamento al cloud'); return; }
     try{
-      SB.from('fatt_studenti').update({ assente: !!on }).eq('pin', pin).select('pin,assente').then(function(res){
+      SB.from('fatt_studenti').update({ assente: !!on, motivo_assenza: (on && motivo) ? motivo : null }).eq('pin', pin).select('pin,assente').then(function(res){
         if(!res || res.error || !res.data || !res.data.length){ cb && cb(false, (res && res.error && res.error.message) || 'il cloud non ha confermato'); return; }
         if(!!res.data[0].assente !== !!on){ cb && cb(false, 'il cloud ha risposto, ma l\'alunno non risulta come previsto'); return; }
-        if(CLOUD_STUD[pin]) CLOUD_STUD[pin].assente = !!on;
+        if(CLOUD_STUD[pin]){ CLOUD_STUD[pin].assente = !!on; CLOUD_STUD[pin].motivo_assenza = (on && motivo) ? motivo : null; }
         if(!on){ cb && cb(true, null); return; }
         // Assente: spengo anche la sua presenza. Se stava dentro, il suo guardiano lo porta ai compiti da solo
         // (out.chiusa) e senza presenza non resta un fantasma «Collegato» in dashboard.
@@ -1723,7 +1735,7 @@
     STATE.sessioneChiusa = true;
     var pin = STATE.studente ? STATE.studente.pin : '';
     stopSessioneWatcher();
-    stopAssegnazioneWatcher(); stopConsegnaWatcher(); stopBloccoWatcher(); stopAttesaWatcher();
+    stopAssegnazioneWatcher(); stopConsegnaWatcher(); stopBloccoWatcher(); stopAttesaWatcher(); stopCompitiWatcher();
     stopPresenza();                       // niente più battiti: non può più resuscitare
     if(pin) cloudClearPresenza(pin);      // e cancello subito quello già scritto
     if(perReset && pin){
@@ -1734,13 +1746,11 @@
     STATE.mieAssegnate = []; STATE.assegnataId = null; STATE.multiMode = false; STATE.consegnata = false;
     byId('topbar-info').innerHTML = '';   // via i comandi della verifica ormai finita
     if(!pin || perReset){ goGate(); return; }
-    // Niente schermate inutili: dopo il Reset la classe passa ai COMPITI A CASA, quindi l'alunno ci finisce
-    // dentro direttamente (ed è anche dove trova il voto, se il docente l'ha pubblicato). Se invece il docente
-    // ha solo ricaricato la classe (nuova verifica in arrivo), torna al PIN: rientrerà quando glielo dice lui.
-    cloudModalitaAlunno(pin, function(mode){
-      if(mode === 'compiti'){ avviaCompitiACasa(); return; }
-      goGate();
-    });
+    // (25/09/2026, come Cedolino) Sospendi, Assente, fattura tolta: si va SEMPRE ai compiti (regola di Mauro), senza chiedere
+    // al cloud. Prima lo si chiedeva, e con la rete che perde la risposta l'alunno finiva sulla schermata del
+    // PIN (visto nel collaudo con la rete disturbata). Se poi il docente riassegna, il sorvegliante dei compiti
+    // lo riporta sulla fattura.
+    avviaCompitiACasa();
   }
   // GETTONE DI SESSIONE: un ALTRO dispositivo ha "piantato" il suo gettone (di solito dopo uno «Sblocca» del
   // docente) → questo dispositivo è stato sostituito. Si chiude da solo SENZA toccare il cloud (la riga ora è
@@ -1785,7 +1795,7 @@
     // 'bloccato' mentre lavoro = qualcuno ha bussato col mio PIN mentre non davo segnali. Io NON mi fermo:
     // il mio battito ha gia' rimesso 'in_corso' sul server.
     if(!STATE.sessArmed){ if(st !== 'non_iniziato') STATE.sessArmed = true; return; }
-    if(st === 'non_iniziato' && !s.fattura_assegnata) terminaSessioneVerifica(true);   // = Reset o classe ricaricata
+    if(st === 'non_iniziato' && !s.fattura_assegnata) terminaSessioneVerifica();   // fattura tolta: ai compiti (il Reset lo riconosce il contrassegno)
   }
   /* ---------- Sorvegliante del CAMBIO ASSEGNAZIONE in tempo reale (lato alunno) ---------- */
   function assegnazioniUguali(a, b){
@@ -1858,7 +1868,7 @@
         if(!nuova.length){
           if((STATE.mieAssegnate || []).length){
             STATE.resetConferme = (STATE.resetConferme || 0) + 1;
-            if(STATE.resetConferme >= 2) terminaSessioneVerifica(true);
+            if(STATE.resetConferme >= 2) terminaSessioneVerifica();   // fattura tolta dal docente: ai compiti
           }
           return;
         }
@@ -1888,8 +1898,8 @@
     var inEditor = (byId('editor').style.display !== 'none');
     var staCompilandoRimossa = inEditor && !!STATE.assegnataId && rimosse.some(function(x){ return x.id === STATE.assegnataId; });
     var corpo = staCompilandoRimossa
-      ? 'Il docente ha modificato le fatture assegnate: la fattura che stai compilando verrà rimossa. Vuoi accettare il cambiamento (perdendo il lavoro su questa) oppure rifiutare e continuare?'
-      : 'Il docente ha modificato le fatture assegnate: una fattura che avevi iniziato verrà rimossa. Vuoi accettare il cambiamento (perdendo quel lavoro) oppure rifiutare e tenerla?';
+      ? 'Il docente ha cambiato le fatture assegnate: quella che stai compilando non è più tra queste. Il tuo lavoro resta salvato e lo ritrovi nei compiti. Vuoi accettare il cambiamento oppure rifiutarlo e continuare?'
+      : 'Il docente ha cambiato le fatture assegnate: una che avevi iniziato non è più tra queste. Il tuo lavoro resta salvato e lo ritrovi nei compiti. Vuoi accettare il cambiamento oppure rifiutarlo e tenerla?';   // (25/09/2026) col foglio unico il lavoro non si perde piu'
     var ov = document.createElement('div'); ov.className = 'modal-overlay';
     ov.innerHTML = '<div class="modal-card" style="max-width:540px;">'
       + '<div class="prev-title" style="padding:18px 26px 4px; font-weight:800; font-size:16px; color:#254a86;">Assegnazione modificata dal docente</div>'
@@ -1900,18 +1910,16 @@
       + '</div></div>';
     ov.querySelector('.modal-btn-ok').addEventListener('click', function(){
       closeModal(ov); STATE.assModaleAperta = false;
-      // Accetta: butta via il lavoro delle fatture rimosse (che aveva iniziato) e adotta la nuova assegnazione.
-      rimosse.forEach(function(x){
-        try{ if(pin) localStorage.removeItem(chiaveLavoro(pin, x.id)); }catch(e){}
-        rimuoviIniziata(pin, x.id); rimuoviConsegnataLocale(pin, x.id);
-      });
+      // Accetta: adotta la nuova assegnazione. (25/09/2026) Il lavoro delle fatture tolte NON si butta piu': e' il suo
+      // foglio, resta nel cloud e nei compiti lo ritrova «Svolto in classe · da consegnare».
+      rimosse.forEach(function(x){ rimuoviIniziata(pin, x.id); rimuoviConsegnataLocale(pin, x.id); });
       STATE.mieAssegnate = nuova; STATE.multiMode = nuova.length > 1;
       if(staCompilandoRimossa){
-        // stava compilando proprio una fattura tolta → deve uscirne
-        STATE.assegnataId = null; STATE.consegnata = false;
-        if(nuova.length > 1){ mostraMenuFatture(); }
-        else if(nuova.length === 1){ STATE.assegnataId = nuova[0].id; LIVELLO = Number(nuova[0].liv) || 2; try{ localStorage.setItem('ff_livello', String(nuova[0].liv || 2)); }catch(e){} entraAlunnoView(); }
-        else { goGate(); }
+        // stava compilando proprio una fattura tolta → ne esce col lavoro salvato e rientra dalla porta normale,
+        // che sa anche se la fattura nuova l'ha gia' consegnata (allora vede il consegnato, non il foglio)
+        mettiAlSicuroLavoro();
+        STATE.assegnataId = null; STATE.consegnata = false; STATE.avviatoPin = null; STATE.avvioInCorsoDa = 0;
+        cloudLeggiContestoAlunno(pin, avviaAlunnoConLista);
       } else if(byId('menu-fatture').style.display !== 'none'){
         renderMenuFatture(); // era al menù → aggiorna la lista (compare la nuova, sparisce la tolta)
       }
@@ -2151,7 +2159,7 @@
               // Se invece ha vinto un altro dispositivo, qui non cambia nulla e resto bloccato.
               if(d.consegnata){
                 STATE.consegnata = true;
-                mostraBloccoMsg('✅', 'Verifica consegnata', 'Il docente ti ha sbloccato: la tua verifica resta consegnata. Se ti riammette, potrai rientrare.', '#2f7d54');
+                mostraConsegnatoAlunno(null, 'Il docente ti ha sbloccato: la consegna resta. Se ti riammette, potrai rientrare.');
               }
               return;
             }
@@ -2160,6 +2168,18 @@
             rebuildConsegnateLocali(pin, function(){ cloudLeggiContestoAlunno(pin, avviaAlunnoConLista); });
           }, function(){ STATE.sbloccoInCorso = false; });
           return;
+        }
+        // (25/09/2026, come Cedolino) Chi e' fermo sul suo CONSEGNATO segue il docente:
+        //   Reset (contrassegno nuovo) → schermata del PIN; Sospendi, Assente o fattura tolta → compiti;
+        //   fattura nuova non ancora consegnata → rientra da solo e la fa.
+        if(typeof s.azzeramento === 'string' && typeof STATE.azzVisto === 'string' && s.azzeramento !== STATE.azzVisto){
+          stopBloccoWatcher(); STATE.sessioneChiusa = false; terminaSessioneVerifica(true); return;
+        }
+        if(STATE.consegnata && (s.sospesa || s.assente || !s.fattura_assegnata)){
+          stopBloccoWatcher(); STATE.consegnata = false; avviaCompitiACasa(); return;
+        }
+        if(STATE.consegnata && !s.consegnata && s.stato === 'non_iniziato' && s.fattura_assegnata){
+          stopBloccoWatcher(); STATE.consegnata = false; entraStudenteNormale(STATE.studente); return;
         }
         // Chi ha consegnato resta sulla sua schermata: non ribussa.
         if(s.consegnata || s.stato === 'consegnato') return;
@@ -2189,7 +2209,9 @@
       // compito finiva nella cartella della 3A. Era la radice di cinque bug diversi.
       classe: (STATE.studente.classe || (CLASSE && CLASSE.classe) || ''),
       fattura_id: STATE.assegnataId || '',
-      modalita: (STATE.modalitaCompiti ? 'compiti' : 'allenamento'),
+      // (24/09/2026) la consegna fatta PER CONTO dell'alunno dal docente resta 'forzata': non apre la soluzione e
+      // nel quaderno il cedolino resta «da consegnare». 'allenamento' e' il nome storico della consegna in classe.
+      modalita: (STATE.modalitaCompiti ? 'compiti' : (STATE.forzataLocale ? 'forzata' : 'allenamento')),
       completato: true,
       risposte: {
         titolo: STATE.titoloCorrente || '',
@@ -2199,6 +2221,8 @@
         cortesiaCorretta: STATE.correctCortesiaHTML || '',
         dashboardAlunno: STATE.myDashboardHTML || '',
         dashboardCorretta: STATE.correctDashboardHTML || '',
+        // svolto in classe: consegnato in classe, oppure nei compiti ma lavorato in classe
+        inClasse: !!(!STATE.modalitaCompiti || STATE.compitoInClasse || (STATE.bozzaMappa && STATE.assegnataId && STATE.bozzaMappa[STATE.assegnataId] && STATE.bozzaMappa[STATE.assegnataId].classe)),
         data: new Date().toISOString()
       }
     };
@@ -2212,7 +2236,9 @@
       if(done) return; done = true;
       if(ok){
         try{
-          if(STATE.bozzaMappa && delId && STATE.bozzaMappa[delId]){ delete STATE.bozzaMappa[delId]; pushBozzaCloud(); }
+          // (24/09/2026) il foglio consegnato si toglie dal cloud dicendolo esplicitamente (null): il cloud ora
+          // aggiorna foglio per foglio e non cancella piu' quello che un dispositivo non manda.
+          if(delId){ STATE.bozzaMappa = STATE.bozzaMappa || {}; STATE.bozzaMappa[delId] = null; pushBozzaCloud(); }
         }catch(e){}
       }
       if(cb) cb(ok);
@@ -2744,7 +2770,7 @@
   function refreshCloudStud(cb){
     if(!SB){ cb && cb(); return; }
     try{
-      SB.from('fatt_studenti').select('pin,nome,cognome,classe,ultimo_accesso,fattura_corrente,livello_corrente,fattura_assegnata,livello_assegnato,consegnata,stato,riammesso,valutazione,assente').then(function(res){
+      SB.from('fatt_studenti').select('pin,nome,cognome,classe,ultimo_accesso,fattura_corrente,livello_corrente,fattura_assegnata,livello_assegnato,consegnata,stato,riammesso,valutazione,assente,motivo_assenza').then(function(res){
         // UN BUCO DI RETE NON DEVE CANCELLARE LA DASHBOARD. Prima CLOUD_STUD veniva azzerato PRIMA di
         // guardare l'esito: con la rete giu' restava vuoto, renderDocente non trovava piu' nessuna classe,
         // scriveva «Nessuna classe caricata» e cancellava pure ff_classe dal browser. Ogni 4 secondi.
@@ -2803,7 +2829,13 @@
     }catch(e){ STATE.pallinoInVolo = 0; }
   }
   function cloudAssegnaStudente(pin, fatturaId, liv){
-    if(SB){ try{ SB.from('fatt_studenti').update({ fattura_assegnata:(fatturaId||null), livello_assegnato:(liv!=null?String(liv):null) }).eq('pin', pin).then(function(){}, function(){}); }catch(e){} }
+    // (25/09/2026, come Cedolino) Se aveva consegnato e ora riceve una fattura che non ha ancora consegnato, torna a
+    // lavorare (senza questo restava fermo su «consegnato» e la fattura nuova non la vedeva).
+    var cs0 = CLOUD_STUD[pin] || {}, fatte0 = CLOUD_CONS[pin] || {};
+    var riapri = !!fatturaId && (cs0.stato === 'consegnato' || cs0.consegnata) && parseAssegnazione(fatturaId).some(function(x){ return !fatte0[x.id]; });
+    var upd = { fattura_assegnata:(fatturaId||null), livello_assegnato:(liv!=null?String(liv):null) };
+    if(riapri){ upd.stato = 'non_iniziato'; upd.consegnata = false; if(CLOUD_STUD[pin]){ CLOUD_STUD[pin].stato = 'non_iniziato'; CLOUD_STUD[pin].consegnata = false; } }
+    if(SB){ try{ SB.from('fatt_studenti').update(upd).eq('pin', pin).then(function(){}, function(){}); }catch(e){} }
     if(!CLOUD_STUD[pin]) CLOUD_STUD[pin] = { pin:pin };
     CLOUD_STUD[pin].fattura_assegnata = fatturaId||null;
     CLOUD_STUD[pin].livello_assegnato = (liv!=null?String(liv):null);
@@ -2869,9 +2901,11 @@
         if(per.sospesa){ cb && cb('compiti'); return; }            // VERIFICA SOSPESA dal docente → compiti (l'assegnazione resta, ma è chiusa a chiave)
         if(per.compiti){ cb && cb('compiti'); return; }            // classe messa in modalità compiti dal Reset → compiti SEMPRE
         if(per.assente){ cb && cb('compiti'); return; }            // segnato ASSENTE dal docente → vede i compiti, senza nessun messaggio strano
-        if(per.fattura_assegnata){ cb && cb(null); return; }       // ha un'assegnazione personale → normale (verifica)
-        var hb = per.docente_heartbeat ? (Date.now() - new Date(per.docente_heartbeat).getTime()) : Infinity;
-        cb && cb((hb < 60000) ? null : 'compiti'); // altrimenti: docente presente → "In attesa"; assente → compiti
+        if(per.fattura_assegnata){ cb && cb(null); return; }       // ha una fattura sua → la fa
+        // (25/09/2026, regola di Mauro, come Cedolino) NIENTE FATTURA ASSEGNATA → COMPITI, SEMPRE: niente piu'
+        // schermata «In attesa», nemmeno col docente collegato. Appena il docente assegna, il sorvegliante dei
+        // compiti porta l'alunno sulla fattura (startCompitiWatcher).
+        cb && cb('compiti');
       }, function(){ cb && cb(null); });
     }catch(e){ cb && cb(null); }
   }
@@ -4007,7 +4041,7 @@
     mettiAlSicuroLavoro();
     STATE.recuperoGiro = (STATE.recuperoGiro || 0) + 1; STATE.caricamentoFoglio = false;   // nessun recupero in sospeso sopravvive all'uscita
     STATE.avviatoPin = null; STATE.avvioInCorsoDa = 0; STATE.avvioGiro = (STATE.avvioGiro || 0) + 1;
-    stopAttesaWatcher(); stopPresenza(); stopCollegatiTimer(); stopBloccoWatcher(); stopConsegnaWatcher(); stopAssegnazioneWatcher(); stopSessioneWatcher(); STATE.riammesso = false; STATE.modalitaCompiti = false; STATE.esercitazione = false; STATE.solExitFn = null;
+    stopAttesaWatcher(); stopPresenza(); stopCollegatiTimer(); stopBloccoWatcher(); stopConsegnaWatcher(); stopAssegnazioneWatcher(); stopSessioneWatcher(); stopCompitiWatcher(); STATE.riammesso = false; STATE.modalitaCompiti = false; STATE.esercitazione = false; STATE.solExitFn = null; STATE.ritornoFn = null; STATE.compitiGiro = (STATE.compitiGiro || 0) + 1;
     // «Esci»: cancello la presenza SOLO se ero il proprietario. Un dispositivo respinto che preme «Esci»
     // non deve far sparire dalla dashboard l'alunno vero, che sta lavorando.
     if(STATE.studente){ cloudClearPresenzaSeMia(STATE.studente.pin); STATE.studente = null; }
@@ -4033,11 +4067,16 @@
   function livelloLabel(d){ var m={'1':'Elementare','2':'Facile','3':'Medio','4':'Difficile','5':'Molto difficile'}; return m[String(d)] || ('Liv. '+d); }
   function fattureRaggruppate(){
     var byLiv = {};
-    FATTURE.forEach(function(f){ var d = (f.difficolta!=null ? String(f.difficolta) : '?'); (byLiv[d] = byLiv[d] || []).push(f); });
-    return Object.keys(byLiv).sort(function(a,b){ return (a==='?'?99:+a) - (b==='?'?99:+b); }).map(function(d){
+    // (24/09/2026) le VERIFICHE stanno in cima, in un gruppo a parte («Verifiche»): gli alunni non le vedono mai
+    // nei compiti, compaiono solo quando il docente le assegna.
+    var verifiche = FATTURE.filter(function(f){ return f.verifica; });
+    FATTURE.forEach(function(f){ if(f.verifica) return; var d = (f.difficolta!=null ? String(f.difficolta) : '?'); (byLiv[d] = byLiv[d] || []).push(f); });
+    var gruppi = Object.keys(byLiv).sort(function(a,b){ return (a==='?'?99:+a) - (b==='?'?99:+b); }).map(function(d){
       var nome = (byLiv[d][0] && byLiv[d][0].difficoltaNome) ? byLiv[d][0].difficoltaNome : livelloLabel(d);
       return { label:(d==='?' ? 'Senza livello' : (d + ' · ' + nome)), items:byLiv[d] };
     });
+    if(verifiche.length) gruppi.unshift({ label:'Verifiche', items:verifiche });
+    return gruppi;
   }
   function fillFattureSelect(sel, selectedId, emptyLabel){
     sel.innerHTML = '';
@@ -4078,7 +4117,7 @@
     // Segnato ASSENTE dal docente: lo dico al posto di «Non collegato», che qui sarebbe un'informazione inutile
     // (certo che non è collegato: non c'è). Sta DOPO «Consegnato»: chi ha consegnato resta consegnato, anche se
     // poi lo segni assente per sbaglio. Non conta fra i «Collegati» (on:false).
-    if(s.assente) return { cls:'st-assente', txt:'Assente', done:false, on:false, corso:false, block:false, assente:true };
+    if(s.assente) return { cls:'st-assente', txt:(s.motivo_assenza === 'no_verifica' ? 'No verifica' : 'Assente'), done:false, on:false, corso:false, block:false, assente:true };
     // Consegna PARZIALE (più fatture, alcune consegnate ma non tutte): mostra quali, in ordine numerico.
     if(multiplo && deliv.length > 0){
       return { cls:'st-part', txt:'Consegnato ' + descriviAssegnazioneBreve(deliv), done:false, on:recent, corso:recent, block:false, part:true };
@@ -4186,7 +4225,7 @@
   var CLASSES = [];
   function buildClassiDaCloud(){
     var m = {};
-    var nascoste = STATE.compitiClassi || []; // le classi "in compiti" sono NASCOSTE dalla dashboard (alunni a casa)
+    var nascoste = []; // (25/09/2026, come Cedolino) le classi restano SEMPRE nella tendina: niente piu' classi nascoste «in compiti»
     Object.keys(CLOUD_STUD || {}).forEach(function(pin){
       var s = CLOUD_STUD[pin]; var c = (s && s.classe) ? s.classe : '';
       if(!c) return;
@@ -4228,25 +4267,42 @@
   }
   // Conferma dell'appello. Il messaggio NOMINA l'alunno: un clic distratto sulla riga sbagliata deve essere
   // fermato qui, non scoperto a verifica finita. Se sta lavorando adesso glielo dico, e decide lui.
+  // (24/09/2026) APPELLO a tre voci, voluto da Mauro: «Assente» o «No verifica» (presente, ma oggi la verifica non la
+  // fa). Per l'alunno e' la stessa cosa: se entra vede i compiti. La differenza e' solo un promemoria per il docente.
   function chiediAssente(a, eraAssente){
     var nome = ((a.cognome || '') + ' ' + (a.nome || '')).trim();
     var st = statoAlunno(a.pin);
-    var msg;
-    if(eraAssente){
-      msg = 'Segnare ' + nome + ' come presente?\n\nTornerà a poter aprire la verifica come tutti gli altri.';
-    } else {
-      msg = 'Segnare ' + nome + ' come assente?\n\nNon potrà aprire la verifica: se entra col suo PIN vedrà i compiti, come un giorno qualsiasi. Puoi cambiare idea quando vuoi.';
-      if(st.corso || st.on){ msg = 'Attenzione: ' + nome + ' sta lavorando ADESSO.\n\n' + msg + '\n\nIl lavoro che ha fatto finora resta salvo: lo ritrova se lo rimetti presente.'; }
-    }
-    showConfirm(msg, function(){
-      cloudSetAssente(a.pin, !eraAssente, function(ok, err){
+    var motivoOra = ((CLOUD_STUD[a.pin] || {}).motivo_assenza) || null;
+    var testo = eraAssente
+      ? (nome + ' ora risulta «' + (motivoOra === 'no_verifica' ? 'No verifica' : 'Assente') + '». Se lo rimetti presente, torna a vedere la fattura assegnata come tutti gli altri.')
+      : ('Come segno ' + nome + '? Assente o No verifica: se entra col suo PIN vede i compiti, non la fattura assegnata. «No verifica» vuol dire presente ma oggi non la fa: è solo un promemoria per te.');
+    if(!eraAssente && (st.corso || st.on)) testo = 'Attenzione: ' + nome + ' sta lavorando ADESSO. Il lavoro fatto finora resta salvo e lo ritrova quando lo rimetti presente.\n\n' + testo;
+    var ov = document.createElement('div'); ov.className = 'modal-overlay';
+    ov.innerHTML = '<div class="modal-card" style="max-width:520px;">'
+      + '<div class="prev-title" style="padding:18px 26px 4px; font-weight:800; font-size:16px; color:#254a86;">Appello</div>'
+      + '<div class="modal-body" style="padding:6px 26px 4px; font-size:15px; line-height:1.5; white-space:pre-line;"></div>'
+      + '<div class="modal-actions"></div></div>';
+    ov.querySelector('.modal-body').textContent = testo;
+    var act = ov.querySelector('.modal-actions');
+    var bottone = function(label, cls, fn){ var b = document.createElement('button'); b.type = 'button'; b.className = 'modal-btn ' + cls; b.textContent = label; b.addEventListener('click', function(){ closeModal(ov); if(fn) fn(); }); act.appendChild(b); };
+    var segna = function(on, motivo){
+      cloudSetAssente(a.pin, on, function(ok, err){
         if(!ok){
           showAlert('Non sono riuscito a segnare ' + nome + ': ' + (err || 'il cloud non ha risposto') + '.\n\nNon è cambiato niente. Controlla il collegamento e riprova.');
           return;
         }
         refreshCloudStud(function(){ refreshConsegne(renderDocente); });
-      });
-    });
+      }, motivo);
+    };
+    bottone('Annulla', 'modal-btn-cancel', null);
+    if(eraAssente){
+      bottone(motivoOra === 'no_verifica' ? 'Assente' : 'No verifica', 'modal-btn-cancel', function(){ segna(true, motivoOra === 'no_verifica' ? null : 'no_verifica'); });
+      bottone('Presente', 'modal-btn-ok', function(){ segna(false, null); });
+    } else {
+      bottone('No verifica', 'modal-btn-ok', function(){ segna(true, 'no_verifica'); });
+      bottone('Assente', 'modal-btn-ok', function(){ segna(true, null); });
+    }
+    document.body.appendChild(ov);
   }
   // Il pulsante dice sempre cosa succede al prossimo clic: «Sospendi» se la verifica è aperta, «Riprendi» se
   // è chiusa. Senza classe caricata non ha niente da sospendere e sparisce.
@@ -4401,7 +4457,9 @@
     Object.keys(cloud || {}).forEach(function(k){
       var inc = cloud[k], have = cur[k];
       var it = (inc && inc.ts) || 0, ht = (have && have.ts) || 0;
+      var inClasse = !!((inc && inc.classe) || (have && have.classe));   // il segno «lavorato in classe» non si perde
       if(!have || it > ht) cur[k] = inc;
+      if(inClasse && cur[k] && typeof cur[k] === 'object') cur[k].classe = true;
     });
     return cur;
   }
@@ -4411,11 +4469,13 @@
   function avviaAlunnoConLista(ctx){
     // Già consegnato (o consegnato dal docente): schermata di blocco, in attesa di eventuale riammissione.
     if(ctx && ctx.stato === 'consegnato'){
-      stopAttesaWatcher();
-      mostraBloccoMsg('✅', 'Verifica consegnata', 'Hai già consegnato la verifica. Attendi: se il docente ti riammette, potrai rientrare.', '#2f7d54');
+      stopAttesaWatcher(); stopCompitiWatcher();
+      STATE.consegnata = true;
+      mostraConsegnatoAlunno(null, 'Hai già consegnato. Se il docente ti riammette, potrai rientrare.');
       startBloccoWatcher();
       return;
     }
+    stopCompitiWatcher();
     var pin = STATE.studente ? STATE.studente.pin : null;
     /* UN AVVIO SOLO (19/09/2026, come in Cedolino Facile). Con la rete lenta questa funzione poteva partire DUE
        volte per lo stesso alunno («Entra» che si riabilita dopo 25 secondi mentre la prima catena e' ancora per
@@ -4494,6 +4554,18 @@
       try{ if(pin) sessionStorage.setItem('ff_studente_attivo', pin); }catch(e){} // dopo un refresh resta dov'era (menù o fattura), niente PIN di nuovo
       try{ if(pin) localStorage.setItem('ff_ultimo_pin', pin); }catch(e){}         // per il rientro dallo stesso dispositivo entro mezz'ora
       // L'assegnazione va saputa PRIMA del primo battito: cosi' la dashboard scrive «In corso» al primo colpo.
+      // (25/09/2026) Nessuna fattura per lui: compiti, non piu' «In attesa».
+      if(!lista.length){ avviaCompitiACasa(); return; }
+      // Tutte le sue fatture le ha GIA' consegnate (in classe, o a casa come compito): vede il suo consegnato,
+      // con la correzione e l'allenamento. Il docente lo vede «Consegnato».
+      var giaFatte = consegnateLocali(pin);
+      if(lista.every(function(x){ return giaFatte.indexOf(x.id) !== -1; })){
+        try{ SB.rpc('ff_dopo_consegna', { p_pin: pin, p_sess: sessMia(), p_dispositivo: idDispositivo(), p_tutte_fatte: true }).then(function(){}, function(){}); }catch(e){}
+        STATE.consegnata = true;
+        mostraConsegnatoAlunno(null, (lista.length === 1 ? 'Questa fattura l\'hai già consegnata' : 'Queste fatture le hai già consegnate') + ': puoi rivedere la correzione o allenarti.');
+        startBloccoWatcher();
+        return;
+      }
       if(lista.length === 1) STATE.assegnataId = lista[0].id;
       startPresenza();
       startConsegnaWatcher();
@@ -4558,7 +4630,7 @@
   }
   // Dopo aver visto la correzione: se l'alunno ha più fatture torna al menù, altrimenti esce.
   function tornaDaConsegna(){
-    if(STATE.modalitaCompiti && STATE.studente){ renderCompitiPicker(); show('menu-fatture'); }
+    if(STATE.modalitaCompiti && STATE.studente){ mostraCompiti(); }
     else if(STATE.multiMode && STATE.studente){ mostraMenuFatture(); }
     else { goGate(); }
   }
@@ -4599,12 +4671,15 @@
     try{
       sessionStorage.setItem('ff_studente_attivo', STATE.studente.pin);
       var raw = localStorage.getItem(chiaveLavoro(STATE.studente.pin, STATE.assegnataId));
+      // copia dei compiti fatta con la versione di prima (chiave 'C'): la raccolgo una volta
+      if(!raw && STATE.modalitaCompiti && !STATE.esercitazione){ raw = localStorage.getItem('ff_lavoroC_' + STATE.studente.pin + '_' + STATE.assegnataId); }
       if(raw){
         var saved = JSON.parse(raw);
         if(saved && saved.esercizioId === STATE.assegnataId && saved.html){ local = { html: saved.html, ts: (saved.ts || 0) }; }
       }
     }catch(e){}
     var ripristinato = false;
+    try{ STATE.tsFoglio = STATE.tsFoglio || {}; STATE.tsFoglio[chiaveLavoro(STATE.studente.pin, STATE.assegnataId)] = local ? (local.ts || 0) : 0; }catch(e){}
     if(local){ byId('editor').innerHTML = local.html; wireEditor(); reidrataDinamici(); sbloccaEditorRipristinato(); ripristinato = true; }
     // Livello scelto dal DOCENTE in fase di assegnazione (predefinito Guidata).
     try{ var lvAss = localStorage.getItem('ff_livello'); if(lvAss) LIVELLO = Number(lvAss) || 2; }catch(e){}
@@ -4622,7 +4697,7 @@
        come scorta vale la bozza gia' letta all'ingresso. Con la rete buona il velo non fa nemmeno in tempo a
        comparire. Chi ha la SUA copia su questo dispositivo dopo tre tentativi a vuoto lavora comunque con quella
        (e' quasi sempre l'ultima), e io continuo a chiedere. */
-    if(!STATE.modalitaCompiti && STATE.studente){
+    if(!STATE.esercitazione && STATE.studente){   // (25/09/2026) anche i compiti: il foglio e' lo stesso della classe
       var attesaId = STATE.assegnataId;
       var pinRec = STATE.studente.pin;
       var localTs = local ? local.ts : -1;
@@ -4631,7 +4706,7 @@
       STATE.userTypedSinceLoad = false;   // azzero: se l'alunno mette DAVVERO mano al foglio prima che il cloud risponda, non lo calpesto
       var ancoraQui = function(){
         return STATE.recuperoGiro === giroRec && STATE.studente && STATE.studente.pin === pinRec &&
-               STATE.assegnataId === attesaId && !STATE.consegnata && !STATE.modalitaCompiti &&
+               STATE.assegnataId === attesaId && !STATE.consegnata && !STATE.esercitazione &&
                byId('editor').style.display !== 'none';
       };
       var liberaFoglio = function(){
@@ -4653,7 +4728,9 @@
           aggiornaNeretto();
         }catch(e){}
         STATE.caricamentoFoglio = false;
+        STATE.tsDaUsare = res.ts || 0;                          // tiene l'orario della versione arrivata dal cloud
         try{ salvaLavoro(); }catch(e){}                         // allineo il locale alla versione più fresca (questo È il suo lavoro)
+        STATE.tsDaUsare = null;
         STATE.caricamentoFoglio = era;
       };
       var chiediAlCloud = function(){
@@ -4683,7 +4760,7 @@
       velaRecupero('apro');
       chiediAlCloud();
     } else {
-      setTimeout(function(){ STATE.caricamentoFoglio = false; }, 0);   // compiti a casa: niente cloud da aspettare
+      setTimeout(function(){ STATE.caricamentoFoglio = false; }, 0);   // allenamento: niente cloud da aspettare
     }
     var top = byId('topbar-info'); top.innerHTML = '';
     var span = document.createElement('span'); span.textContent = STATE.studente.cognome + ' ' + STATE.studente.nome + ' · classe ' + CLASSE.classe;
@@ -4698,7 +4775,8 @@
         top.appendChild(rc);
       }
       var toC = document.createElement('span'); toC.className = 'link link-menu'; toC.textContent = '← Torna ai compiti'; toC.style.marginRight = '14px';
-      toC.addEventListener('click', function(){ salvaLavoro(); renderCompitiPicker(); show('menu-fatture'); });
+      if(STATE.ritornoFn) toC.textContent = '← Indietro';
+      toC.addEventListener('click', function(){ salvaLavoro(); if(STATE.ritornoFn){ var rit = STATE.ritornoFn; STATE.ritornoFn = null; rit(); return; } mostraCompiti(); });
       top.appendChild(toC);
     } else if(STATE.multiMode && STATE.studente){
       var toMenu = document.createElement('span'); toMenu.className = 'link link-menu'; toMenu.textContent = '← Le mie fatture'; toMenu.style.marginRight = '14px';
@@ -4871,7 +4949,9 @@
   // NON precompila la verifica sulla stessa fattura sullo stesso dispositivo. Compiti: ff_lavoroC_ ; verifiche: ff_lavoro_.
   // Allenamento (esercitazione libera dopo la consegna): binario locale a sé ('E'), così NON tocca né la verifica
   // ('') né il compito già consegnato ('C'). Resta sullo stesso dispositivo, non finisce mai nel cloud.
-  function chiaveLavoro(pin, id){ return 'ff_lavoro' + (STATE.esercitazione ? 'E' : (STATE.modalitaCompiti ? 'C' : '')) + '_' + pin + '_' + id; }
+  // (25/09/2026, regola di Mauro, come Cedolino) UN FOGLIO SOLO per fattura: quello che l'alunno fa in classe se lo
+  // ritrova nei compiti e viceversa, su qualsiasi dispositivo. Resta a parte solo l'allenamento ('E').
+  function chiaveLavoro(pin, id){ return 'ff_lavoro' + (STATE.esercitazione ? 'E' : '') + '_' + pin + '_' + id; }
   // (23/09/2026) Butta da QUESTO dispositivo il lavoro azzerato dal docente (Reset o Carica classe): le copie del
   // foglio di verifica e dell'allenamento, gli elenchi delle consegnate e delle iniziate e, se e' l'alunno di
   // questa pagina, la bozza in memoria coi salvataggi in partenza. I compiti a casa (ff_lavoroC_) restano.
@@ -4908,7 +4988,7 @@
   // Il contrassegno che questo alunno conosceva entrando: viaggia con la bozza, e la porta la rifiuta se e' superato.
   function azzMio(){ return (typeof STATE.azzVisto === 'string') ? STATE.azzVisto : null; }
   function pushBozzaCloud(){
-    if(!SB || !STATE.studente || !STATE.proprietario || STATE.modalitaCompiti) return;
+    if(!SB || !STATE.studente || !STATE.proprietario || STATE.esercitazione) return;   // anche i compiti salgono nel cloud (24/09/2026)
     if(!STATE.bozzaLetta) return;   // non so ancora cosa c'e' nel cloud: scrivere ora cancellerebbe le altre bozze
     // UN INVIO ALLA VOLTA (19/09/2026). La bozza e' la richiesta piu' pesante dell'app (tutta la fotografia del
     // foglio). Con la rete lenta ne partivano diverse insieme, e una VECCHIA poteva arrivare dopo una nuova e
@@ -4938,7 +5018,7 @@
   // a 55.000 caratteri (il limite del browser e' 64 KB); oltre si ripiega sull'invio normale.
   function pushBozzaSubito(){
     try{
-      if(!SB || !STATE.studente || !STATE.proprietario || STATE.modalitaCompiti || !STATE.bozzaLetta) return;
+      if(!SB || !STATE.studente || !STATE.proprietario || STATE.esercitazione || !STATE.bozzaLetta) return;
       var corpo = { p_pin: STATE.studente.pin, p_sess: sessMia(), p_dispositivo: idDispositivo(), p_bozza: (STATE.bozzaMappa || {}), p_azz: azzMio() };
       if(JSON.stringify(corpo).length < 55000) rpcSubito('ff_bozza_salva', corpo);
       else { STATE.bozzaInVolo = 0; pushBozzaCloud(); }
@@ -4968,17 +5048,39 @@
       if(!ed || ed.classList.contains('sol-mode')) return;
       commitValues(ed);
       var ora = Date.now();
+      var htmlOra = ed.innerHTML;
+      /* L'ORARIO DEL FOGLIO E' QUELLO DELL'ULTIMA MODIFICA, NON DELL'ULTIMO SALVATAGGIO (25/09/2026, come Cedolino).
+         Fra due copie vince la piu' recente, quindi un foglio rimasto indietro su un dispositivo non deve prendersi
+         l'ora di adesso solo perche' viene salvato uscendo, sospendendo o cambiando schermata. Se il foglio e'
+         identico all'ultima copia, tiene l'orario di quella; se arriva dal cloud, tiene l'orario del cloud. */
+      var chiaveOra = chiaveLavoro(STATE.studente.pin, STATE.assegnataId);
+      if(typeof STATE.tsDaUsare === 'number' && STATE.tsDaUsare > 0){ ora = STATE.tsDaUsare; }
+      else {
+        try{
+          var prevB0 = STATE.bozzaMappa ? STATE.bozzaMappa[STATE.assegnataId] : null;
+          var prevL0 = null; try{ var rawL0 = localStorage.getItem(chiaveOra); if(rawL0) prevL0 = JSON.parse(rawL0); }catch(eL0){}
+          if(prevB0 && prevB0.html === htmlOra && prevB0.ts) ora = prevB0.ts;
+          else if(prevL0 && prevL0.esercizioId === STATE.assegnataId && prevL0.html === htmlOra && prevL0.ts) ora = prevL0.ts;
+          /* DUE SCHEDE SULLO STESSO DISPOSITIVO (25/09/2026, visto in Cedolino in 5I): la scheda rimasta indietro non
+             salva sopra la copia piu' nuova scritta da un'altra scheda, se qui l'alunno non ha toccato niente. */
+          var tsMio = (STATE.tsFoglio || {})[chiaveOra];
+          if(prevL0 && prevL0.esercizioId === STATE.assegnataId && prevL0.html !== htmlOra && typeof tsMio === 'number'
+             && (prevL0.ts || 0) > tsMio && !((STATE.ultimoTocco || 0) > tsMio)) return;
+        }catch(eT){}
+      }
+      STATE.tsFoglio = STATE.tsFoglio || {}; STATE.tsFoglio[chiaveOra] = ora;
       // Il dispositivo puo' rifiutare la scrittura (memoria piena, navigazione privata): la copia nel cloud deve
       // partire LO STESSO. Prima stavano nello stesso «try» e saltavano insieme, in silenzio.
       try{
-      localStorage.setItem(chiaveLavoro(STATE.studente.pin, STATE.assegnataId), JSON.stringify({ esercizioId: STATE.assegnataId, html: ed.innerHTML, ts: ora }));
+      localStorage.setItem(chiaveOra, JSON.stringify({ esercizioId: STATE.assegnataId, html: htmlOra, ts: ora }));
       }catch(eLocale){}
-      // Congelamento del tempo: il lavoro in corso di VERIFICA va anche nel cloud, con un piccolo ritardo
-      // (accorpa le raffiche di battitura). Ogni versione porta un ORARIO (ts): al rientro vince la PIÙ RECENTE
-      // fra locale e cloud, così cambiando dispositivo non ricompare più il vecchio al posto dell'ultima scritta.
-      if(!STATE.modalitaCompiti && STATE.proprietario && STATE.assegnataId){
+      // Il lavoro va anche nel cloud, con un piccolo ritardo (accorpa le raffiche di battitura). Ogni versione porta
+      // un ORARIO (ts): al rientro vince la PIÙ RECENTE fra locale e cloud. (25/09/2026) Anche nei compiti.
+      if(!STATE.esercitazione && STATE.proprietario && STATE.assegnataId){
         STATE.bozzaMappa = STATE.bozzaMappa || {};
-        STATE.bozzaMappa[STATE.assegnataId] = { html: ed.innerHTML, ts: ora };
+        // «classe»: questo foglio e' stato lavorato in classe (poi nei compiti diventa «Svolto in classe»)
+        var prevB = STATE.bozzaMappa[STATE.assegnataId];
+        STATE.bozzaMappa[STATE.assegnataId] = { html: htmlOra, ts: ora, classe: !!((prevB && prevB.classe) || !STATE.modalitaCompiti || STATE.compitoInClasse) };
         if(STATE.bozzaCloudTimer) clearTimeout(STATE.bozzaCloudTimer);
         STATE.bozzaCloudTimer = setTimeout(pushBozzaCloud, 1500);
       }
@@ -5114,6 +5216,7 @@
     VC.cf = (rec && rec.cf) ? rec.cf : 0;
     VC.ct = 0; VC.mode = mode || 'alunno'; VC.cognome = (rec && rec.cognome) || ''; VC.exitFn = exitFn || null;
     VC.pin = (rec && rec.pin) || ''; VC.nome = (rec && rec.nome) || ''; VC.val = (rec && rec.valutazione) || null;
+    VC.esciTesto = (rec && rec.esciTesto) || null;   // scritta del pulsante d'uscita, se chi apre la vista ne vuole una sua
     if(!VC.fatture.length){ showAlert('Nessuna fattura da mostrare.'); if(VC.exitFn) VC.exitFn(); return; }
     if(VC.cf >= VC.fatture.length) VC.cf = 0;
     vcGo();
@@ -5139,7 +5242,7 @@
     var sp = document.createElement('div'); sp.className = 'vc-spacer';
     if(VC.ct <= 1){ var pdf = document.createElement('button'); pdf.type = 'button'; pdf.className = 'vc-pdf'; pdf.textContent = 'Scarica PDF'; pdf.addEventListener('click', function(){ stampa('soluzione-view'); }); sp.appendChild(pdf); }
     var esci = document.createElement('button'); esci.type = 'button'; esci.className = 'vc-esci';
-    esci.textContent = (VC.mode === 'valuta') ? '← Torna alla dashboard' : ((VC.mode === 'docente') ? '← Torna ai nomi' : '← Torna ai compiti');
+    esci.textContent = VC.esciTesto ? VC.esciTesto : ((VC.mode === 'valuta') ? '← Torna alla dashboard' : ((VC.mode === 'docente') ? '← Torna ai nomi' : '← Torna ai compiti'));
     esci.addEventListener('click', function(){ if(VC.exitFn) VC.exitFn(); });
     sp.appendChild(esci); row.appendChild(sp); bar.appendChild(row);
     return bar;
@@ -5470,8 +5573,9 @@
       if(acc && acc.allow === false){
         var bn = byId('blocco-nome'); if(bn) bn.textContent = al.cognome + ' ' + al.nome;
         if(acc.consegnata){
-          // Docente ha già sbloccato una verifica CONSEGNATA: mostra "Verifica consegnata", NON riaprire il lavoro.
-          mostraBloccoMsg('✅', 'Verifica consegnata', 'La tua verifica è consegnata. Se il docente ti riammette, potrai rientrare.', '#2f7d54');
+          // Ha gia' consegnato: vede il suo consegnato (correzione e allenamento, se non e' una verifica).
+          STATE.consegnata = true;
+          mostraConsegnatoAlunno(null, 'Hai già consegnato. Se il docente ti riammette, potrai rientrare.');
         } else {
           mostraBloccoMsg('🔒', 'Accesso bloccato', 'Hai già effettuato l\'accesso in precedenza. Per continuare, chiedi lo sblocco al docente.', '#b4472f');
         }
@@ -5532,28 +5636,171 @@
     try{ mostraSoluzioneCompilatore(true); commitValues(byId('editor')); STATE.correctDashboardHTML = byId('editor').innerHTML; }catch(e){}
   }
   function avviaCompitiACasa(){
-    STATE.modalitaCompiti = true;
+    STATE.modalitaCompiti = true; STATE.esercitazione = false;
     STATE.multiMode = false;
-    STATE.solExitFn = null;
-    // Anche per i compiti serve il gettone: e' quello che permette a questo dispositivo di salvare il PROPRIO
-    // lavoro. La porta lo da' solo a chi ha davvero diritto ai compiti.
-    if(SB && STATE.studente && !sessMia()){
+    STATE.solExitFn = null; STATE.ritornoFn = null; STATE.compitoInClasse = false;
+    STATE.avvioGiro = (STATE.avvioGiro || 0) + 1;   // un avvio in classe ancora per strada non deve piu' toccare niente
+    // ...e il prossimo avvio in classe deve partire davvero: la lista dei compiti usa lo stesso riquadro del menu'
+    // delle fatture, e senza questo la guardia «un avvio solo» scambiava i compiti per una sessione gia' aperta.
+    STATE.avviatoPin = null; STATE.avvioInCorsoDa = 0;
+    stopPresenza(); stopSessioneWatcher(); stopConsegnaWatcher(); stopAssegnazioneWatcher(); stopBloccoWatcher(); stopAttesaWatcher();
+    var pinC = STATE.studente ? STATE.studente.pin : '';
+    STATE.azzVisto = null; try{ if(pinC) STATE.azzVisto = localStorage.getItem('ff_azz_' + pinC); }catch(e){}
+    // (25/09/2026, come Cedolino) Il foglio dei compiti e' lo stesso della classe e vive nel cloud: servono il
+    // gettone e la mappa dei fogli gia' salvati, come in classe. Il gettone lo chiedo SEMPRE.
+    STATE.bozzaMappa = {}; STATE.bozzaLetta = false; STATE.proprietario = false;
+    var giroC = STATE.compitiGiro = (STATE.compitiGiro || 0) + 1;
+    var dopoGettone = function(){
+      if(STATE.compitiGiro !== giroC || !STATE.modalitaCompiti) return;
+      STATE.proprietario = !!sessMia();
+      leggiBozzaCompiti(giroC, 0);
+    };
+    if(SB && pinC){
       try{
-        SB.rpc('ff_compiti_aggancio', { p_pin: STATE.studente.pin, p_dispositivo: idDispositivo() }).then(function(r){
+        SB.rpc('ff_compiti_aggancio', { p_pin: pinC, p_dispositivo: idDispositivo() }).then(function(r){
           if(r && !r.error && r.data) tieniGettone(r.data);
-        }, function(){});
-      }catch(e){}
+          dopoGettone();
+        }, function(){ dopoGettone(); });
+      }catch(e){ dopoGettone(); }
     }
     var go = function(){
-      var pin = STATE.studente ? STATE.studente.pin : '';
-      cloudCompitiDone(pin, function(done){
-        STATE.compitiDone = done || [];
+      caricaQuaderno(function(){
         renderCompitiPicker();
         show('menu-fatture');
+        startCompitiWatcher();
       });
     };
     if((typeof FATTURE==='undefined' || !FATTURE || !FATTURE.length) && SB){ cloudCaricaContesto(function(){ go(); }); }
     else cloudAggiornaArchivio(function(){ go(); });   // sempre: la maschera dei compiti deve mostrare l'archivio di ADESSO
+  }
+  // Legge la mappa dei fogli gia' salvati nel cloud (serve prima di scriverci, se no si cancellano gli altri).
+  function leggiBozzaCompiti(giro, tentativo){
+    var pin = STATE.studente ? STATE.studente.pin : '';
+    if(!SB || !pin){ STATE.bozzaLetta = true; return; }
+    if(STATE.compitiGiro !== giro || !STATE.modalitaCompiti) return;
+    var riprova = function(){ setTimeout(function(){ leggiBozzaCompiti(giro, tentativo + 1); }, tentativo < 5 ? 3000 : 10000); };
+    try{
+      SB.rpc('ff_bozza_leggi', { p_pin: pin, p_sess: sessMia(), p_dispositivo: idDispositivo() }).then(function(rb){
+        if(STATE.compitiGiro !== giro || !STATE.modalitaCompiti) return;
+        if(!rb || rb.error){ riprova(); return; }
+        var b = rb.data || null;
+        if(b && typeof b === 'object'){ STATE.bozzaMappa = mergeBozzaCloud(STATE.bozzaMappa || {}, b); }
+        STATE.bozzaLetta = true;
+        pushBozzaCloud();
+      }, function(){ riprova(); });
+    }catch(e){ riprova(); }
+  }
+  // IL QUADERNO (25/09/2026, come Cedolino): per ogni fattura cosa ha fatto l'alunno, dal cloud (ff_mio_quaderno).
+  function caricaQuaderno(cb){
+    var pin = STATE.studente ? STATE.studente.pin : '';
+    if(!SB || !pin){ cb && cb(); return; }
+    try{
+      SB.rpc('ff_mio_quaderno', { p_pin: pin }).then(function(r){
+        if(r && !r.error && r.data){
+          STATE.quaderno = r.data;
+          var ids = {};
+          (r.data.consegne || []).forEach(function(c){ if(c && c.id && c.completato && c.modalita !== 'forzata') ids[c.id] = true; });
+          STATE.compitiDone = Object.keys(ids);
+        }
+        cb && cb();
+      }, function(){ cb && cb(); });
+    }catch(e){ cb && cb(); }
+  }
+  function statoQuaderno(){
+    var q = STATE.quaderno || {}, out = {};
+    var get = function(id){ return (out[id] = out[id] || {}); };
+    (q.consegne || []).forEach(function(c){
+      if(!c || !c.id) return;
+      var o = get(c.id);
+      if(c.completato && c.modalita !== 'forzata'){ o.consegnato = true; if(c.in_classe) o.inClasse = true; }
+      else if(c.completato && c.modalita === 'forzata' && c.lavoro && !c.non_svolta){ o.forzata = true; }   // raccolto dal docente
+      else if(!c.completato && c.lavoro){ o.riaperto = true; }                                                   // riaperto dal Riammetti
+    });
+    Object.keys(q.bozze || {}).forEach(function(id){ var o = get(id); o.iniziato = true; if(q.bozze[id] && q.bozze[id].classe) o.bozzaClasse = true; });
+    parseAssegnazione(q.assegnata).forEach(function(x){ get(x.id).assegnato = true; });
+    return out;
+  }
+  // Torna alla lista dei compiti rileggendo il quaderno (dopo una consegna lo stato e' cambiato).
+  function mostraCompiti(){
+    STATE.modalitaCompiti = true; STATE.esercitazione = false;
+    caricaQuaderno(function(){ renderCompitiPicker(); show('menu-fatture'); startCompitiWatcher(); });
+  }
+  // (25/09/2026, regola di Mauro) Chi sta nei compiti passa SUBITO alla fattura appena il docente gliela assegna.
+  function stopCompitiWatcher(){ if(STATE.compitiTimer){ clearInterval(STATE.compitiTimer); STATE.compitiTimer = null; } }
+  function startCompitiWatcher(){
+    stopCompitiWatcher();
+    if(!SB) return;
+    STATE.compitiTimer = setInterval(function(){
+      if(!STATE.studente || !STATE.modalitaCompiti){ stopCompitiWatcher(); return; }
+      if(STATE.compitiStatoInVolo && (Date.now() - STATE.compitiStatoInVolo) < 8000) return;
+      STATE.compitiStatoInVolo = Date.now();
+      var pin = STATE.studente.pin;
+      SB.rpc('ff_stato', { p_pin: pin }).then(function(r){
+        STATE.compitiStatoInVolo = 0;
+        var d = (r && !r.error) ? r.data : null;
+        if(!d || !STATE.studente || STATE.studente.pin !== pin || !STATE.modalitaCompiti) return;
+        // Reset del docente mentre l'alunno e' nei compiti: prendo il contrassegno nuovo (se no le sue bozze
+        // verrebbero rifiutate) e rileggo i fogli dal cloud, tenendo quello che sta scrivendo adesso.
+        if(typeof d.azzeramento === 'string' && d.azzeramento !== STATE.azzVisto){
+          STATE.azzVisto = d.azzeramento; try{ localStorage.setItem('ff_azz_' + pin, d.azzeramento); }catch(e){}
+          var curId = STATE.assegnataId, cur = (curId && STATE.bozzaMappa) ? STATE.bozzaMappa[curId] : null;
+          STATE.bozzaMappa = {}; if(cur && curId) STATE.bozzaMappa[curId] = cur;
+          STATE.bozzaLetta = false; leggiBozzaCompiti(STATE.compitiGiro, 0);
+        }
+        if(d.fattura_assegnata && !d.sospesa && !d.assente){ stopCompitiWatcher(); passaAllaFatturaAssegnata(); }
+      }, function(){ STATE.compitiStatoInVolo = 0; });
+    }, 5000);
+  }
+  function passaAllaFatturaAssegnata(){
+    var al = STATE.studente; if(!al) return;
+    mettiAlSicuroLavoro();   // il compito che stava scrivendo resta salvo (dispositivo e cloud)
+    STATE.compitiGiro = (STATE.compitiGiro || 0) + 1;
+    STATE.modalitaCompiti = false; STATE.esercitazione = false; STATE.ritornoFn = null; STATE.solExitFn = null;
+    STATE.compitoInClasse = false; STATE.consegnata = false;
+    document.querySelectorAll('.modal-overlay').forEach(function(m){ try{ m.parentNode.removeChild(m); }catch(e){} });
+    entraStudenteNormale(al);
+  }
+  // SCHERMATA DEL CONSEGNATO in classe (25/09/2026, come Cedolino): chi ha consegnato lui un esercizio puo' rivedere
+  // la correzione e allenarsi sulla stessa fattura. Verifiche e consegne fatte dal docente: solo il messaggio.
+  function mostraConsegnatoAlunno(titolo, msg){
+    STATE.modalitaCompiti = false; STATE.esercitazione = false; STATE.consegnata = true;
+    var pin = STATE.studente ? STATE.studente.pin : '';
+    mostraBloccoMsg('✅', titolo || 'Consegnato', msg, '#2f7d54');
+    azioniConsegnato([], null);
+    if(!pin || !SB) return;
+    cloudLeggiContestoAlunno(pin, function(ctx){
+      if(!ctx || ctx.errore) return;
+      if(typeof ctx.azzeramento === 'string') STATE.azzVisto = ctx.azzeramento;
+      rebuildConsegnateLocali(pin, function(){
+        var b = byId('blocco'); if(!b || b.style.display === 'none') return;
+        var fatte = consegnateLocali(pin);
+        var assegnati = (ctx.lista || []).map(function(x){ return FATTURE.find(function(f){ return f.id === x.id; }); }).filter(Boolean);
+        var verifica = assegnati.some(function(f){ return f.verifica; });
+        var tit = titolo || (verifica ? 'Verifica consegnata' : 'Esercitazione consegnata');
+        if(!titolo || (byId('blocco-title') && byId('blocco-title').textContent !== tit)) mostraBloccoMsg('✅', tit, msg, '#2f7d54');
+        var rivedibili = assegnati.filter(function(f){ return !f.verifica && fatte.indexOf(f.id) !== -1; });
+        azioniConsegnato(rivedibili, function(){ mostraConsegnatoAlunno(tit, msg); startBloccoWatcher(); });
+      });
+    });
+  }
+  function azioniConsegnato(lista, ritorno){
+    var host = byId('blocco-azioni');
+    if(!host){
+      var esci = byId('btn-esci-blocco'); if(!esci) return;
+      host = document.createElement('div'); host.id = 'blocco-azioni';
+      host.style.cssText = 'display:flex; flex-direction:column; gap:10px; align-items:center; margin:18px 0 14px;';
+      esci.parentNode.insertBefore(host, esci);
+    }
+    host.innerHTML = '';
+    (lista || []).forEach(function(f){
+      var riga = document.createElement('div'); riga.style.cssText = 'display:flex; gap:10px; flex-wrap:wrap; justify-content:center; align-items:center;';
+      if(lista.length > 1){ var n = document.createElement('span'); n.textContent = 'Fattura ' + numeroFattura(f.id); n.style.cssText = 'color:var(--muted); font-size:14px;'; riga.appendChild(n); }
+      var b1 = document.createElement('button'); b1.className = 'btn-ghost'; b1.style.fontFamily = 'inherit'; b1.textContent = 'Rivedi la correzione';
+      b1.addEventListener('click', function(){ stopBloccoWatcher(); STATE.ritornoFn = ritorno; apriSoluzioneCompito(f); });
+      var b2 = document.createElement('button'); b2.className = 'btn-green'; b2.style.fontFamily = 'inherit'; b2.textContent = 'Allenati';
+      b2.addEventListener('click', function(){ stopBloccoWatcher(); STATE.ritornoFn = ritorno; apriEsercitazione(f); });
+      riga.appendChild(b1); riga.appendChild(b2); host.appendChild(riga);
+    });
   }
   // Maschera: TUTTE le fatture dell'archivio. Fatte → "✓ Consegnato" + "Vedi soluzione"; da fare → "Compila".
   function renderCompitiPicker(){
@@ -5563,32 +5810,45 @@
     var nome = STATE.studente ? STATE.studente.nome : '';
     byId('menu-title').textContent = 'Compiti a casa' + (nome ? (' — ' + nome) : '');
     var done = STATE.compitiDone || [];
+    var Q = statoQuaderno();   // (25/09/2026) cosa ha fatto l'alunno, fattura per fattura
     var list = byId('menu-list'); list.innerHTML = '';
     var tot = 0, fatti = 0;
     // Un esercizio che nell'archivio porta "verifica": true non compare fra i compiti (e il cloud non ne da' mai la soluzione).
     (FATTURE || []).filter(function(f){ return !f.verifica; }).sort(function(a, b){ return (parseInt(numeroFattura(a.id), 10) || 0) - (parseInt(numeroFattura(b.id), 10) || 0); }).forEach(function(f){
       tot++;
-      var fatta = done.indexOf(f.id) !== -1; if(fatta) fatti++;
+      var q = Q[f.id] || {};
+      var fatta = !!q.consegnato || done.indexOf(f.id) !== -1; if(fatta) fatti++;
       var row = document.createElement('div'); row.className = 'menu-row' + (fatta ? ' fatta' : '');
       var num = document.createElement('div'); num.className = 'menu-num'; num.textContent = numeroFattura(f.id);
       var info = document.createElement('div'); info.className = 'menu-info';
       var t = document.createElement('div'); t.className = 't'; t.textContent = f.titolo || ('Esercizio ' + numeroFattura(f.id));
       var s = document.createElement('div'); s.className = 's'; s.textContent = f.difficoltaNome ? ('Difficoltà ' + f.difficoltaNome) : 'Fattura da compilare';
+      // (25/09/2026) i nomi approvati da Mauro per Cedolino: «In corso in classe», «Svolto in classe · da consegnare»,
+      // «Svolto in classe · consegnato», «Da fare», «Consegnato»
+      var daConsegnare = !fatta && (q.forzata || (!q.assegnato && (q.bozzaClasse || q.riaperto)));
+      var inCorsoClasse = !fatta && !daConsegnare && q.assegnato;
+      if(daConsegnare){ s.textContent = 'Svolto in classe · da consegnare'; s.style.fontWeight = '600'; s.style.color = '#8a5a12'; }
+      else if(inCorsoClasse){ s.textContent = 'In corso in classe'; s.style.fontWeight = '600'; s.style.color = '#254a86'; }
+      else if(!fatta){ s.textContent = 'Da fare' + (f.difficoltaNome ? (' · difficoltà ' + f.difficoltaNome) : ''); }
       info.appendChild(t); info.appendChild(s);
       var cta = document.createElement('div'); cta.className = 'menu-cta';
       if(fatta){
-        var d = document.createElement('span'); d.className = 'menu-done'; d.textContent = '✓ Consegnato'; cta.appendChild(d);
+        s.textContent = f.difficoltaNome ? ('Difficoltà ' + f.difficoltaNome) : '';
+        var d = document.createElement('span'); d.className = 'menu-done'; d.textContent = '✓ ' + (q.inClasse ? 'Svolto in classe · consegnato' : 'Consegnato'); cta.appendChild(d);
         var vs = document.createElement('button'); vs.className = 'btn-ghost'; vs.textContent = 'Vedi soluzione'; vs.style.marginLeft = '8px';
         vs.addEventListener('click', function(){ apriSoluzioneCompito(f); }); cta.appendChild(vs);
         // Già consegnato: ora può ALLENARSI liberamente sulla stessa fattura, quante volte vuole. Nessun invio al prof.
         var al = document.createElement('button'); al.className = 'btn-ghost'; al.textContent = 'Allenati'; al.style.marginLeft = '8px';
         al.addEventListener('click', function(){ apriEsercitazione(f); }); cta.appendChild(al);
       } else {
-        var b = document.createElement('button'); b.className = 'btn-compila'; b.textContent = 'Compila'; b.addEventListener('click', function(){ apriCompito(f); }); cta.appendChild(b);
+        var classeQ = !!(daConsegnare || inCorsoClasse || q.bozzaClasse);
+        var b = document.createElement('button'); b.className = 'btn-compila';
+        b.textContent = daConsegnare ? 'Completa e consegna' : ((inCorsoClasse || q.iniziato) ? 'Continua' : 'Compila');
+        b.addEventListener('click', function(){ apriCompito(f, classeQ); }); cta.appendChild(b);
       }
       row.appendChild(num); row.appendChild(info); row.appendChild(cta); list.appendChild(row);
     });
-    byId('menu-sub').textContent = 'Scegli una fattura, compilala e consegnala al prof. Dopo la consegna vedrai (e potrai stampare) la soluzione. Ogni fattura si consegna una volta sola; poi puoi allenarti quante volte vuoi (senza inviarla). (Fatte ' + fatti + ' su ' + tot + ')';
+    byId('menu-sub').textContent = 'Scegli una fattura, compilala e consegnala al prof. Il tuo lavoro si salva da solo e lo ritrovi su qualsiasi dispositivo, anche in classe. Dopo la consegna vedrai (e potrai stampare) la soluzione. Ogni fattura si consegna una volta sola; poi puoi allenarti quante volte vuoi (senza inviarla). (Fatte ' + fatti + ' su ' + tot + ')';
     // Se il docente ha PUBBLICATO la valutazione della verifica, mostra una card in cima (cliccabile).
     var pin0 = STATE.studente ? STATE.studente.pin : '';
     if(pin0){ cloudLeggiValutazione(pin0, function(val, snap){
@@ -5603,9 +5863,10 @@
       var list = byId('menu-list'); if(list) list.insertBefore(card, list.firstChild);
     }); }
   }
-  function apriCompito(f){
+  function apriCompito(f, inClasse){
     STATE.assegnataId = f.id; STATE.consegnata = false; STATE.solExitFn = null;
     STATE.modalitaCompiti = true; STATE.esercitazione = false;   // consegna vera, non allenamento
+    STATE.compitoInClasse = !!inClasse;                          // svolto (o in corso) in classe: la consegna lo ricorda
     LIVELLO = 2; try{ localStorage.setItem('ff_livello', '2'); }catch(e){}
     entraAlunnoView();
   }
@@ -5621,7 +5882,7 @@
           // Consegna compito NON arrivata al cloud: non dico "consegnato", riporto l'alunno a compilare (lavoro intatto).
           STATE.consegnata = false;
           var f = FATTURE.find(function(x){ return x.id === STATE.assegnataId; });
-          if(f){ apriCompito(f); } else { renderCompitiPicker(); show('menu-fatture'); }
+          if(f){ apriCompito(f, STATE.compitoInClasse); } else { renderCompitiPicker(); show('menu-fatture'); }
           showAlert('Consegna non riuscita: controlla la connessione e riprova. Tranquillo, il tuo lavoro è al sicuro.');
           return;
         }
@@ -5658,7 +5919,9 @@
       dashboardAlunno: STATE.myDashboardHTML || '',
       dashboardCorretta: STATE.correctDashboardHTML || ''
     }] };
-    mostraViewerCompiti(rec, 'alunno', function(){ renderCompitiPicker(); show('menu-fatture'); });
+    // (24/09/2026) aperta dalla schermata del consegnato in classe: si torna li'
+    if(STATE.ritornoFn){ rec.esciTesto = '← Indietro'; var rit = STATE.ritornoFn; mostraViewerCompiti(rec, 'alunno', function(){ STATE.ritornoFn = null; rit(); }); return; }
+    mostraViewerCompiti(rec, 'alunno', function(){ mostraCompiti(); });
   }
 
   /* ===================== ALLENAMENTO (esercitazione libera, dopo la consegna) =====================
@@ -5820,6 +6083,8 @@
       var info = document.createElement('div'); info.className = 'arch-info';
       var t = document.createElement('div'); t.className = 'arch-nm'; t.textContent = it.titolo || ('Esercizio ' + numeroFattura(id));
       info.appendChild(t);
+      // (24/09/2026) consegnato in classe, o nei compiti ma lavorato in classe
+      if(it.risposte && it.risposte.inClasse){ var mc = document.createElement('div'); mc.className = 'arch-mt'; mc.textContent = 'Svolto in classe'; info.appendChild(mc); }
       var b = document.createElement('button'); b.className = 'arch-apri'; b.textContent = 'Soluzione'; b.addEventListener('click', function(){ apriSoluzioneArchivio(pin, id); });
       row.appendChild(av); row.appendChild(info); row.appendChild(b); list.appendChild(row);
     });
@@ -6063,7 +6328,7 @@
   byId('btn-reset').addEventListener('click', function(){
     var cl = (CLASSE && CLASSE.classe) || STATE.classeAttiva || '';
     if(!cl){ showAlert('Nessuna classe selezionata da azzerare. Carica o scegli una classe.'); return; }
-    showConfirm('Resettare la classe ' + cl + '? Passerà ai COMPITI A CASA (i suoi alunni, col PIN, faranno i compiti) e uscirà dalla dashboard.\n\n🛟 Prima di azzerare preparo un backup di sicurezza di questa classe (con le verifiche consegnate), e ti chiederò di confermare che il file è stato salvato.\n\n⚠ Le verifiche consegnate vengono poi CANCELLATE dal cloud (restano solo nel file di backup). I voti già messi restano (gli alunni li vedono nei compiti). I compiti a casa e le altre classi non si toccano.', function(){
+    showConfirm('Reset della ' + cl + '?\n\nLA CLASSE RESTA QUI, nella tendina, pronta per la prossima volta.\n\n🛟 Prima preparo un backup di sicurezza di questa classe (con le consegne e i compiti), e ti chiederò di confermare che il file è stato salvato.\n\n• La fattura assegnata viene tolta e tutti tornano presenti.\n• ESERCIZI: il lavoro di ognuno resta nei suoi compiti. Chi ha consegnato lo trova «Svolto in classe · consegnato», gli altri «Svolto in classe · da consegnare», col loro lavoro dentro.\n• VERIFICHE: le consegne e i fogli vengono cancellati (restano nel backup). I voti già messi restano.\n\nI compiti a casa e le altre classi non si toccano.', function(){
       // BACKUP AUTOMATICO DI SICUREZZA prima di cancellare le consegne. Se fallisce, NON resetto (niente perdita di dati).
       backupClasse(function(ok){
         if(!ok){
@@ -6077,15 +6342,17 @@
         // illusione. Visto succedere davvero il 17/07: finestra di salvataggio rimasta in attesa tutta la
         // notte, verifiche gia' cancellate. Ora l'unico che puo' confermare che il file esiste sei tu.
         showConfirm('🛟 BACKUP PRONTO: «backup_' + cl + '_' + ff_dateStamp() + '.json».\n\nControlla ORA che sia nella cartella Download. Se il browser ti ha chiesto dove salvarlo, salvalo adesso (la finestra potrebbe essere dietro a questa).\n\nPremi OK SOLO se il file c\'è davvero: subito dopo le verifiche consegnate della ' + cl + ' verranno cancellate dal cloud e resteranno solo in quel file.\n\nSe non lo trovi, premi Annulla: non verrà cancellato niente.', function(){
-        cloudResetClasse(cl);
-        cloudSetModalitaCompiti(cl, true); // dopo il Reset la classe passa in modalità compiti a casa
+        cloudResetClasse(cl, function(okR, errR){
+        if(!okR){ showAlert('Reset NON riuscito: ' + (errR || 'il cloud non ha risposto') + '.\n\nNon è stato cancellato niente. Controlla il collegamento e riprova.'); refreshCloudStud(function(){ refreshConsegne(renderDocente); }); return; }
+        // (25/09/2026, come Cedolino) La classe NON va piu' ai «compiti a casa» e non sparisce dalla dashboard.
         STATE.assegnate = []; STATE.assegnataId = null;
         try{
           localStorage.removeItem('ff_assegnata'); localStorage.removeItem('ff_livello'); sessionStorage.removeItem('ff_studente_attivo');
           (CLASSE && CLASSE.alunni ? CLASSE.alunni : []).forEach(function(a){ buttaLavoroAzzerato(a.pin); });
         }catch(e){}
         renderDocente();
-        showAlert('Classe ' + cl + ' resettata. Le verifiche consegnate ora vivono SOLO nel file di backup che hai salvato: tienilo da parte finché non hai messo i voti. La classe è passata ai COMPITI A CASA. Per rifarci una verifica, ricaricala con «Carica classe».');
+        showAlert('Reset della ' + cl + ' fatto.\n\nGli esercizi sono nei compiti di ognuno: chi li ha consegnati li trova consegnati, gli altri li trovano da consegnare. Le verifiche consegnate vivono SOLO nel file di backup: tienilo da parte finché non hai messo i voti.\n\nLa classe è rimasta qui, con i suoi alunni e i suoi PIN: per la prossima prova ti basta assegnare un\'altra fattura. Intanto, col PIN, i ragazzi fanno i compiti.');
+        });
         }, function(){   // Annulla sulla conferma del backup: non si tocca NIENTE
           showAlert('Reset ANNULLATO: non è stato cancellato niente. Le verifiche della ' + cl + ' sono ancora tutte nel cloud.\n\nSe il backup non è stato salvato, controlla le impostazioni di download del browser (o la finestra «Salva con nome» rimasta aperta) e riprova.');
         });
@@ -6170,9 +6437,19 @@
     if(STATE.consegnata) return;
     if(STATE.esercitazione){ fineEsercitazione(); return; } // allenamento: nessun invio al prof, solo soluzione a confronto
     if(STATE.modalitaCompiti){ consegnaCompito(); return; } // compiti a casa: consegna + mostra soluzione
-    var msgCons = STATE.multiMode
-      ? 'Vuoi consegnare questa fattura? Una volta consegnata non potrai più modificarla né vedere le soluzioni.'
-      : 'Vuoi consegnare l\'esercitazione? Una volta consegnata non potrai più modificarla né vedere le soluzioni.';
+    /* (25/09/2026, regola di Mauro come in Cedolino) Gli esercizi sono esercitazioni: dopo la consegna in classe
+       l'alunno vede SUBITO la soluzione a confronto. Solo una verifica vera («verifica»: true nell'archivio) resta
+       senza soluzione. La soluzione si chiede al cloud DOPO la consegna riuscita (ff_soluzione la da' solo a chi ha
+       consegnato quella fattura). */
+    var fAtt = (typeof FATTURE !== 'undefined' && FATTURE) ? FATTURE.find(function(x){ return x.id === STATE.assegnataId; }) : null;
+    var conSol = !(fAtt && fAtt.verifica);
+    var msgCons = conSol
+      ? (STATE.multiMode
+          ? 'Vuoi consegnare questa fattura? Dopo la consegna vedrai subito la soluzione, ma non potrai più modificarla.'
+          : 'Vuoi consegnare l\'esercitazione? Dopo la consegna vedrai subito la soluzione, ma non potrai più modificarla.')
+      : (STATE.multiMode
+          ? 'Vuoi consegnare questa fattura? Una volta consegnata non potrai più modificarla né vedere le soluzioni.'
+          : 'Vuoi consegnare la verifica? Una volta consegnata non potrai più modificarla né vedere le soluzioni.');
     showConfirm(msgCons, function(){
       try{ salvaLavoro(); }catch(e){}                 // metto al sicuro l'ultimo tasto PRIMA di segnare consegnata (poi salvaLavoro si blocca)
       STATE.consegnata = true;
@@ -6192,15 +6469,30 @@
           if(CLOUD_STUD[STATE.studente.pin]){ CLOUD_STUD[STATE.studente.pin].consegnata = tutteFatte; CLOUD_STUD[STATE.studente.pin].stato = (tutteFatte?'consegnato':'in_corso'); }
         }
         try{ if(tutteFatte && STATE.studente) sessionStorage.removeItem('ff_studente_attivo'); }catch(e){}
-        // VERIFICA: la consegna è DEFINITIVA e SENZA feedback. Non mostriamo MAI la soluzione all'alunno
-        // (né cortesia corretta, né dashboard corretta). Le soluzioni restano salvate nel cloud per l'export docente.
-        if(tutteFatte){
-          stopAssegnazioneWatcher(); stopConsegnaWatcher(); stopPresenza();
-          mostraBloccoMsg('✅', 'Verifica consegnata', 'Hai consegnato la verifica: non puoi più modificarla e le soluzioni non sono visibili. Se il docente ti riammette, potrai rientrare.', '#2f7d54');
-          startBloccoWatcher();
-        } else {
-          mostraMenuFatture(); // restano fatture da fare → torna al menù (nessuna soluzione mostrata)
-        }
+        if(tutteFatte){ stopAssegnazioneWatcher(); stopConsegnaWatcher(); stopPresenza(); }
+        var idCons = STATE.assegnataId;
+        var chiudi = function(){
+          if(tutteFatte){
+            mostraConsegnatoAlunno((conSol ? 'Esercitazione consegnata' : 'Verifica consegnata'),
+              conSol ? 'Hai consegnato: puoi rivedere la correzione o allenarti sulla stessa fattura.'
+                     : 'Hai consegnato la verifica: non puoi più modificarla e le soluzioni non sono visibili. Se il docente ti riammette, potrai rientrare.');
+            startBloccoWatcher();
+          } else { mostraMenuFatture(); }
+        };
+        // VERIFICA VERA: la consegna è DEFINITIVA e SENZA feedback. Non mostriamo MAI la soluzione all'alunno.
+        if(!conSol){ chiudi(); return; }
+        // ESERCITAZIONE: subito la soluzione a confronto (le 4 viste dei compiti).
+        conSoluzione(idCons, function(sol){
+          if(sol) preparaCorrette(sol);
+          mostraViewerCompiti({ esciTesto: (tutteFatte ? 'Ho finito' : '← Le mie fatture'), fatture:[{
+            id: idCons,
+            num: numeroFattura(idCons),
+            cortesiaAlunno: STATE.myCortesiaHTML || '',
+            cortesiaCorretta: STATE.correctCortesiaHTML || '',
+            dashboardAlunno: STATE.myDashboardHTML || '',
+            dashboardCorretta: STATE.correctDashboardHTML || ''
+          }] }, 'alunno', chiudi);
+        });
       });
     });
   });
@@ -6231,7 +6523,7 @@
       STATE.saveTimer = setTimeout(function(){ STATE.saveTimer = null; salvaLavoro(); }, ms);
     }
     byId('editor').addEventListener('input', function(e){
-      if(e && e.isTrusted) STATE.userTypedSinceLoad = true;   // SOLO digitazione VERA dell'alunno (le modifiche
+      if(e && e.isTrusted){ STATE.userTypedSinceLoad = true; STATE.ultimoTocco = Date.now(); }   // SOLO digitazione VERA dell'alunno (le modifiche
                                                               // automatiche dell'editor hanno isTrusted=false)
       programmaSalva(600);
     });
@@ -6240,7 +6532,7 @@
     // ridisegnare il foglio sopra quello che l'alunno aveva appena fatto a colpi di tocchi.
     document.addEventListener('click', function(e){
       if(!e || !e.isTrusted || !e.target || !e.target.closest) return;
-      if(e.target.closest('#editor')) STATE.userTypedSinceLoad = true;
+      if(e.target.closest('#editor')){ STATE.userTypedSinceLoad = true; STATE.ultimoTocco = Date.now(); }
     }, true);
     // Un cestino o un pulsante della barra («Nuovo articolo», «Sconto», «Spese») cambiano la fattura senza nessuna
     // battitura: prima quel cambiamento non faceva partire il salvataggio, e con un F5 subito dopo tornava indietro.
@@ -6356,6 +6648,59 @@
     };
     prova();
     setInterval(prova, 15000);
+  })();
+  /* AGGIORNAMENTO AUTOMATICO DELLE PAGINE VECCHIE (25/09/2026, chiesto da Mauro). Il 24/09 in 5I due alunni
+     lavoravano con una versione dell'app di giorni prima, rimasta aperta nel telefono: il telefono riprende la
+     scheda com'era, senza ricaricarla. Ora la pagina chiede al sito quale versione e' pubblicata (versione.txt,
+     da aggiornare INSIEME a VERSIONE_APP a ogni pubblicazione) all'avvio, quando torna in primo piano e ogni
+     5 minuti; se ce n'e' una piu' nuova si ricarica da sola, ma SOLO quando e' sicuro: alunno sulla schermata
+     del PIN, nella lista dei compiti o sul foglio senza averlo toccato nell'ultimo minuto (prima mette al sicuro
+     il lavoro, telefono e cloud). Mai sulla schermata del consegnato, mai durante una consegna, mai al docente.
+     Il ricarico e' un F5: in classe si torna sul foglio, nei compiti alla lista. Al massimo una volta ogni
+     10 minuti, cosi' un sito che risponde a meta' non la fa ricaricare in continuazione. */
+  var VERSIONE_APP = '20260925-01';
+  (function(){
+    var ultimo = 0, inCorso = false;
+    function visibile(id){ var el = byId(id); return !!(el && el.style.display !== 'none'); }
+    function momentoSicuro(){
+      if(STATE.consegnata || STATE.caricamentoFoglio) return false;
+      if(!STATE.studente) return visibile('gate');                         // docente o schermate sue: mai
+      if(visibile('menu-fatture')) return true;
+      if(visibile('editor')) return !((STATE.ultimoTocco || 0) > Date.now() - 60000);
+      return false;                                                        // consegnato, soluzione, attesa: si aspetta
+    }
+    function ricarica(){
+      if(inCorso) return; inCorso = true;
+      try{ sessionStorage.setItem('ff_aggiornata', String(Date.now())); }catch(e){}
+      // nei compiti la pagina non si segna l'alunno per il ricarico (lo fa solo l'ingresso in classe): senza questo
+      // dalla lista dei compiti si finirebbe sulla schermata del PIN
+      try{ if(STATE.studente && STATE.studente.pin) sessionStorage.setItem('ff_studente_attivo', STATE.studente.pin); }catch(e){}
+      try{ if(visibile('editor')) mettiAlSicuroLavoro(); }catch(e){}
+      var t0 = Date.now();
+      (function aspetta(){
+        if((STATE.bozzaInVolo || STATE.bozzaDaRimandare) && Date.now() - t0 < 6000){ setTimeout(aspetta, 250); return; }
+        try{ if(STATE.bozzaInVolo || STATE.bozzaDaRimandare) pushBozzaSubito(); }catch(e){}
+        setTimeout(function(){ location.reload(); }, 300);
+      })();
+    }
+    function controlla(){
+      if(inCorso || Date.now() - ultimo < 20000) return;
+      ultimo = Date.now();
+      try{ if(Date.now() - Number(sessionStorage.getItem('ff_aggiornata') || 0) < 600000) return; }catch(e){}
+      try{
+        fetch('versione.txt?t=' + Date.now(), { cache: 'no-store' }).then(function(r){ return (r && r.ok) ? r.text() : ''; }).then(function(t){
+          t = String(t || '').trim();
+          if(!/^\d{8}-\d{2}$/.test(t) || t <= VERSIONE_APP) return;
+          if(momentoSicuro()){ ricarica(); return; }
+          // non e' il momento: riprovo fra poco (il controllo al sito lo rifaccio, cosi' resta leggero)
+          setTimeout(function(){ ultimo = 0; controlla(); }, 30000);
+        }, function(){});
+      }catch(e){}
+    }
+    document.addEventListener('visibilitychange', function(){ if(document.visibilityState !== 'hidden') controlla(); });
+    window.addEventListener('pageshow', function(e){ if(e && e.persisted) controlla(); });
+    setInterval(function(){ if(document.visibilityState !== 'hidden') controlla(); }, 5 * 60 * 1000);
+    setTimeout(controlla, 4000);
   })();
   /* fine boot */
 })();
