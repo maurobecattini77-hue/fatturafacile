@@ -1005,8 +1005,17 @@
      si possono tenere (niente schermo diviso, niente finestre mobili): se l'alunno va altrove la pagina diventa
      NASCOSTA, sempre. Quindi sull'iPhone «fuori» = pagina nascosta, e basta. L'iPad (schermo diviso) e gli
      Android restano con tutti i controlli. */
+  /* 26/09/2026: anche l'iPhone con «Richiedi sito web desktop». Li' Safari si presenta come un Mac («Macintosh»,
+     come l'iPad), ma resta uno schermo a tocco e piccolo: il Mac vero non ha il tocco (maxTouchPoints 0), l'iPad
+     piu' piccolo ha il lato corto di 744 px, ogni iPhone al massimo 440. */
   function iPhoneSoloSchermo(){
-    try{ return /iPhone|iPod/.test(navigator.userAgent || ''); }catch(e){ return false; }
+    try{
+      var ua = navigator.userAgent || '';
+      if(/iPhone|iPod/.test(ua)) return true;
+      if(!/Macintosh/.test(ua) || !(navigator.maxTouchPoints > 1)) return false;
+      var lato = Math.min(screen.width || 0, screen.height || 0);
+      return lato > 0 && lato < 600;
+    }catch(e){ return false; }
   }
   function finestraRistretta(){
     try{
@@ -6658,7 +6667,7 @@
      il lavoro, telefono e cloud). Mai sulla schermata del consegnato, mai durante una consegna, mai al docente.
      Il ricarico e' un F5: in classe si torna sul foglio, nei compiti alla lista. Al massimo una volta ogni
      10 minuti, cosi' un sito che risponde a meta' non la fa ricaricare in continuazione. */
-  var VERSIONE_APP = '20260925-01';
+  var VERSIONE_APP = '20260926-01';
   (function(){
     var ultimo = 0, inCorso = false;
     function visibile(id){ var el = byId(id); return !!(el && el.style.display !== 'none'); }
