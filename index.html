@@ -4798,7 +4798,7 @@
       ? 'Sei in <b>allenamento</b> su una fattura già consegnata: esercitati quanto vuoi, <b>non verrà inviata al prof</b>. A fine compilazione vedrai la soluzione a confronto.'
       : 'Questa è la tua <b>fattura di cortesia</b>, con i valori che hai inserito. Controllala bene prima di consegnare.');
     byId('btnChiudi').style.display = ''; byId('btnIndietro').style.display = '';
-    byId('btnChiudi').textContent = STATE.esercitazione ? 'Fine e vedi soluzione' : 'Chiudi e consegna';
+    byId('btnChiudi').textContent = STATE.esercitazione ? 'Fine - vedi soluzione' : 'Chiudi e consegna';
     if(!STATE.modalitaCompiti) cloudPresenza();
     show('editor');
   }
@@ -6667,7 +6667,7 @@
      il lavoro, telefono e cloud). Mai sulla schermata del consegnato, mai durante una consegna, mai al docente.
      Il ricarico e' un F5: in classe si torna sul foglio, nei compiti alla lista. Al massimo una volta ogni
      10 minuti, cosi' un sito che risponde a meta' non la fa ricaricare in continuazione. */
-  var VERSIONE_APP = '20260927-01';
+  var VERSIONE_APP = '20260927-02';
   (function(){
     var ultimo = 0, inCorso = false;
     function visibile(id){ var el = byId(id); return !!(el && el.style.display !== 'none'); }
