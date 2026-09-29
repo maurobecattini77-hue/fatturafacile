@@ -1468,6 +1468,8 @@
       }catch(e){ STATE.gettoneInVolo = 0; }
       return;
     }
+    // (29/09/2026) Nei compiti nessun battito, da nessuna strada: chi fa i compiti per il docente non e' collegato.
+    if(STATE.modalitaCompiti) return;
     // Rete lenta: se il battito di prima e' ancora per strada (da meno di 8 secondi) non gliene accodo un altro.
     if(STATE.battitoInVolo && (Date.now() - STATE.battitoInVolo) < 8000) return;
     STATE.battitoInVolo = Date.now();
@@ -2101,9 +2103,16 @@
     // invisibile nell'export: zero in pagella pur avendo fatto la verifica. Ora chiedo al cloud chi ha una
     // bozza in corso e includo anche loro (il loro lavoro lo salvo io, da qui: vedi catturaDaBozza).
     var prosegui = function(conLavoro, letturaOk){
-      var targets = CLASSE.alunni.filter(function(a){ var st = statoAlunno(a.pin); return st.on || st.part || conLavoro[a.pin]; });
+      // (29/09/2026) Il lavoro che conta e' quello sulle fatture ASSEGNATE a lui: la bozza di un compito a casa non fa
+      // di nessuno un alunno «da consegnare». Prima chi aveva solo compiti finiva «Consegnato» senza niente di assegnato,
+      // e chi non aveva aperto la verifica ma aveva un compito a casa in bozza si trovava la verifica «non svolta».
+      var lavoroSuiSuoi = function(a){
+        var ids = conLavoro[a.pin]; if(!ids || !ids.length) return false;
+        return effectiveAssignedList(a.pin).some(function(x){ return ids.indexOf(x.id) !== -1; });
+      };
+      var targets = CLASSE.alunni.filter(function(a){ var st = statoAlunno(a.pin); return st.on || st.part || lavoroSuiSuoi(a); });
       if(!targets.length){ showAlert('Nessun alunno in corso: non c\'è niente da consegnare.'); return; }
-      var scollegatiConLavoro = targets.filter(function(a){ var st = statoAlunno(a.pin); return !st.on && !st.part && conLavoro[a.pin]; }).length;
+      var scollegatiConLavoro = targets.filter(function(a){ var st = statoAlunno(a.pin); return !st.on && !st.part && lavoroSuiSuoi(a); }).length;
       showConfirm('Consegnare ORA la verifica per i ' + targets.length + (targets.length===1?' alunno':' alunni') + ' che hanno iniziato? Viene salvato il lavoro che hanno fatto finora (come se consegnassero loro).'
         + (scollegatiConLavoro ? ('\n\n🛟 Ne includo ' + scollegatiConLavoro + (scollegatiConLavoro===1 ? ' che non è più collegato ma ha lavoro salvato nel cloud: lo recupero io.' : ' che non sono più collegati ma hanno lavoro salvato nel cloud: lo recupero io.')) : '')
         + (letturaOk ? '' : '\n\n⚠ Non sono riuscito a controllare chi ha lavoro non consegnato (rete): potrei saltare qualche alunno scollegato. Se puoi, riprova.')
@@ -2120,7 +2129,7 @@
         var conLavoro = {};
         ((res.data) || []).forEach(function(s){
           var b = s.bozza_corrente;
-          if(b && typeof b === 'object' && Object.keys(b).length) conLavoro[s.pin] = true;
+          if(b && typeof b === 'object' && Object.keys(b).length) conLavoro[s.pin] = Object.keys(b);   // le fatture con una bozza
         });
         prosegui(conLavoro, true);
       }, function(){ prosegui({}, false); });
@@ -2698,6 +2707,7 @@
   // fuori: true/false = il pallino rosso; se non lo dico, «fuori» vale quanto «sfondo» (pagina nascosta).
   function battitoSubito(sfondo, fuori){
     if(!(STATE.studente && STATE.proprietario && STATE.presenzaTimer)) return;
+    if(STATE.modalitaCompiti) return;   // (29/09/2026) nei compiti la pagina tace: chi fa i compiti non e' collegato (regola di Mauro)
     if(STATE.salutato) return;   // ho gia' detto «ho chiuso»: un battito partito dopo il saluto lo sorpasserebbe e resusciterebbe la presenza
     rpcSubito('ff_battito', {
       p_pin: STATE.studente.pin, p_sess: sessMia(), p_dispositivo: idDispositivo(),
@@ -2807,6 +2817,7 @@
     var g = PALLINI[pin]; if(!g) return false;
     var st = statoAlunno(pin);
     if(st.done || st.assente || !PALLINO_STATI[g.stato || '']) return false;
+    if(!st.on) return false;   // (29/09/2026) pallino solo su chi la dashboard mostra al lavoro, mai su chi fa i compiti
     if(!attaccatoAllApp(g) || !attaccatoAllApp(CLOUD_STUD[pin])) return false;
     if(g.fuori) return true;
     if(!g.rientrato_il) return false;
@@ -4131,11 +4142,11 @@
     if(multiplo && deliv.length > 0){
       return { cls:'st-part', txt:'Consegnato ' + descriviAssegnazioneBreve(deliv), done:false, on:recent, corso:recent, block:false, part:true };
     }
-    if(recent){
-      // «In corso» appena e' dentro con una fattura sua: non aspetto che il battito abbia scritto QUALE.
-      if(s.fattura_corrente || (assigned.length === 1)){ return { cls:'st-on', txt:'In corso', done:false, on:true, corso:true, block:false }; }
-      return { cls:'st-on', txt:'Collegato', done:false, on:true, corso:false, block:false };
-    }
+    // «In corso» appena e' dentro con una fattura sua: non aspetto che il battito abbia scritto QUALE.
+    // (29/09/2026, regola di Mauro, come in Cedolino Facile) Senza una fattura assegnata l'alunno e' nei COMPITI, e chi fa i
+    // compiti per il docente non e' collegato: niente piu' «Collegato» (e quindi niente «Consegna» su chi non ha niente da
+    // consegnare). Con piu' fatture assegnate e' «In corso» anche mentre sceglie dal menu' (prima risultava «Collegato»).
+    if(recent && assigned.length){ return { cls:'st-on', txt:'In corso', done:false, on:true, corso:true, block:false }; }
     return { cls:'st-off', txt:'Non collegato', done:false, on:false, corso:false, block:false };
   }
   /* UN OROLOGIO SOLO (19/09/2026, come Cedolino Facile e la dashboard verifiche): «collegato» = l'app ha parlato
@@ -6667,7 +6678,7 @@
      il lavoro, telefono e cloud). Mai sulla schermata del consegnato, mai durante una consegna, mai al docente.
      Il ricarico e' un F5: in classe si torna sul foglio, nei compiti alla lista. Al massimo una volta ogni
      10 minuti, cosi' un sito che risponde a meta' non la fa ricaricare in continuazione. */
-  var VERSIONE_APP = '20260927-02';
+  var VERSIONE_APP = '20260929-01';
   (function(){
     var ultimo = 0, inCorso = false;
     function visibile(id){ var el = byId(id); return !!(el && el.style.display !== 'none'); }
