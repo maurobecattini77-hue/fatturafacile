@@ -2864,6 +2864,25 @@
       }, function(){ cb && cb(); });
     }catch(e){ cb && cb(); }
   }
+  /* 20/10/2026 — MENO TRAFFICO (come Cedolino Facile). Il giro ogni 4 secondi rileggeva TUTTI gli alunni di tutte le
+     classi, anche se la dashboard ne mostra una sola. Ora legge solo la classe aperta e la rimette nella fotografia
+     (CLOUD_STUD) al posto della sua vecchia; le altre classi restano come all'ultima lettura intera. La lettura intera
+     (refreshCloudStud) si rifa' ogni 15 giri (un minuto), quando si cambia classe, prima che ci sia una fotografia buona,
+     e quando la classe aperta torna vuota (riconoscimento scaduto o classe tolta: lo decide refreshCloudStud, come prima). */
+  function refreshCloudStudClasse(cb){
+    var cl = (typeof CLASSE !== 'undefined' && CLASSE && CLASSE.classe) ? CLASSE.classe : '';
+    if(!SB || !cl || !STATE.cloudStudCaricato || (STATE.giriDashboard % 15) === 0){ refreshCloudStud(cb); return; }
+    try{
+      SB.from('fatt_studenti').select('pin,nome,cognome,classe,ultimo_accesso,fattura_corrente,livello_corrente,fattura_assegnata,livello_assegnato,consegnata,stato,riammesso,valutazione,assente,motivo_assenza').eq('classe', cl).then(function(res){
+        if(!res || res.error){ cb && cb(); return; }   // buco di rete: tengo l'ultima fotografia buona, come refreshCloudStud
+        var righe = (res.data) || [];
+        if(!righe.length){ refreshCloudStud(cb); return; }
+        Object.keys(CLOUD_STUD).forEach(function(pin){ if(CLOUD_STUD[pin] && CLOUD_STUD[pin].classe === cl) delete CLOUD_STUD[pin]; });
+        righe.forEach(function(s){ CLOUD_STUD[s.pin] = s; });
+        cb && cb();
+      }, function(){ cb && cb(); });
+    }catch(e){ cb && cb(); }
+  }
   /* PALLINO ROSSO nella dashboard (22/09/2026, stesse regole di Cedolino Facile). Una lettura leggera al
      secondo, solo della classe aperta. Acceso finche' l'ULTIMO segnale dell'alunno dice «fuori» e per 3 secondi
      dopo il rientro (Mauro: «regola ottima», un'uscita lampo ripetuta si fa notare); vale per chi ha un
@@ -3060,7 +3079,7 @@
     } else { doRender(); }
     // il refresh periodico aggiorna SOLO stato e conteggi: non ricostruisce le tendine
     allineaOraCloud(); STATE.giriDashboard = 0;
-    STATE.collegatiTimer = setInterval(function(){ if((++STATE.giriDashboard % 75) === 0) allineaOraCloud(); cloudDocenteHeartbeat(); refreshCloudStud(function(){ refreshConsegne(refreshStati); }); }, 4000);
+    STATE.collegatiTimer = setInterval(function(){ if((++STATE.giriDashboard % 75) === 0) allineaOraCloud(); cloudDocenteHeartbeat(); refreshCloudStudClasse(function(){ refreshConsegne(refreshStati); }); }, 4000);
     STATE.pallinoTimer = setInterval(refreshPallini, 1000);   // il pallino rosso: lettura leggera, una al secondo
   }
   function cloudLoginPin(pin, cb, tentativo){
@@ -4321,7 +4340,7 @@
   }
   function setClasseAttiva(nome){
     var c = CLASSES.find(function(x){ return x.classe === nome; });
-    if(c){ CLASSE = c; STATE.classeAttiva = nome; try{ localStorage.setItem('ff_classe', JSON.stringify(c)); }catch(e){} renderDocente(); }
+    if(c){ CLASSE = c; STATE.classeAttiva = nome; try{ localStorage.setItem('ff_classe', JSON.stringify(c)); }catch(e){} renderDocente(); refreshCloudStud(function(){ refreshConsegne(renderDocente); }); }
   }
   // Conferma dell'interruttore di pubblicazione. NOMINA l'alunno e dice cosa vedrà lui: è l'unico modo di
   // accorgersi di un clic finito sulla riga sbagliata prima che l'alunno se ne accorga da casa.
@@ -6739,7 +6758,7 @@
      il lavoro, telefono e cloud). Mai sulla schermata del consegnato, mai durante una consegna, mai al docente.
      Il ricarico e' un F5: in classe si torna sul foglio, nei compiti alla lista. Al massimo una volta ogni
      10 minuti, cosi' un sito che risponde a meta' non la fa ricaricare in continuazione. */
-  var VERSIONE_APP = '20261018-01';
+  var VERSIONE_APP = '20261020-01';
   (function(){
     var ultimo = 0, inCorso = false;
     function visibile(id){ var el = byId(id); return !!(el && el.style.display !== 'none'); }
