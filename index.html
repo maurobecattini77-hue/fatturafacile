@@ -975,7 +975,13 @@
     var sveglia = setTimeout(function(){ try{ ac.abort(); }catch(e){} }, TEMPO_MASSIMO_RICHIESTA_MS);
     return fetch(risorsa, o).then(function(r){ clearTimeout(sveglia); return r; }, function(e){ clearTimeout(sveglia); throw e; });
   }
-  try{ if(window.supabase){ SB = window.supabase.createClient(SB_URL, SB_KEY, { global:{ fetch: fetchConTempoMassimo }, auth:{ storage: window.sessionStorage, storageKey:'ff-docente-auth', persistSession:true, autoRefreshToken:true, detectSessionInUrl:false } }); } }catch(e){}
+  /* (25/10/2026) Richiesta di Mauro: quando lui e' entrato con la password, Claude deve poter lavorare dalle sue schede.
+     Il riconoscimento del docente sta nella memoria lunga del browser (come Cedolino Facile), sotto la sua chiave:
+     «Accesso docente» chiede sempre la password e dopo F5 si resta dentro col segno della scheda (ff_docente_attivo).
+     Le schede aperte con la versione di prima lo avevano nella memoria della scheda: lo sposto, cosi' l'aggiornamento
+     non le butta fuori. */
+  try{ var ffVecchio = sessionStorage.getItem('ff-docente-auth'); if(ffVecchio && !localStorage.getItem('ff-docente-auth')) localStorage.setItem('ff-docente-auth', ffVecchio); sessionStorage.removeItem('ff-docente-auth'); }catch(e){}
+  try{ if(window.supabase){ SB = window.supabase.createClient(SB_URL, SB_KEY, { global:{ fetch: fetchConTempoMassimo }, auth:{ storage: window.localStorage, storageKey:'ff-docente-auth', persistSession:true, autoRefreshToken:true, detectSessionInUrl:false } }); } }catch(e){}
   /* MESSAGGIO CHE DEVE PARTIRE ANCHE SE IL TELEFONO CONGELA O CHIUDE LA PAGINA: `keepalive` e' la promessa del
      browser di spedirlo comunque. Serve a due soli messaggi, brevi: «sono passato in secondo piano» e «ho chiuso». */
   function rpcSubito(nome, corpo){
@@ -6758,7 +6764,7 @@
      il lavoro, telefono e cloud). Mai sulla schermata del consegnato, mai durante una consegna, mai al docente.
      Il ricarico e' un F5: in classe si torna sul foglio, nei compiti alla lista. Al massimo una volta ogni
      10 minuti, cosi' un sito che risponde a meta' non la fa ricaricare in continuazione. */
-  var VERSIONE_APP = '20261020-01';
+  var VERSIONE_APP = '20261025-01';
   (function(){
     var ultimo = 0, inCorso = false;
     function visibile(id){ var el = byId(id); return !!(el && el.style.display !== 'none'); }
